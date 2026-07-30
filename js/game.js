@@ -33,7 +33,19 @@
 
     // Audio
     audioContext: null,
+
+    // Best score (persisted)
+    bestScore: 0,
+    allCheckpointsBonusGiven: false,
   };
+
+  // Reusable scratch vectors to avoid per-frame allocations
+  const _scratchTarget = new BABYLON.Vector3();
+  const _scratchLookTarget = new BABYLON.Vector3();
+
+  // Cached DOM references (populated in init)
+  const dom = {};
+  const lastHudText = {};
 
   // Audio Functions (Web Audio API)
   function initAudio() {
@@ -81,6 +93,13 @@
     const canvas = document.getElementById('gameCanvas');
     const engine = new BABYLON.Engine(canvas, true);
 
+    // Cache DOM references once instead of querying every frame
+    cacheDomRefs();
+
+    // Load persisted best score
+    gameState.bestScore = parseInt(localStorage.getItem('planeGameBestScore') || '0', 10);
+    if (dom.bestScore) dom.bestScore.textContent = gameState.bestScore;
+
     // Initialize audio
     initAudio();
 
@@ -112,6 +131,18 @@
     gameState.planeMesh = planeMesh;
   }
 
+  // Cache DOM Elements
+  function cacheDomRefs() {
+    dom.altitude = document.getElementById('altitude');
+    dom.speed = document.getElementById('speed');
+    dom.heading = document.getElementById('heading');
+    dom.flightTime = document.getElementById('flightTime');
+    dom.score = document.getElementById('score');
+    dom.bestScore = document.getElementById('bestScore');
+    dom.fps = document.getElementById('fps');
+    dom.gameOverText = document.getElementById('gameOverText');
+  }
+
   // Create Checkpoints (rings to fly through)
   function createCheckpoints(scene) {
     gameState.checkpoints = [];
@@ -135,6 +166,7 @@
       const ring = BABYLON.MeshBuilder.CreateTorus('ring' + index, { diameter: 60, thickness: 3 }, scene);
       ring.position = new BABYLON.Vector3(pos.x, pos.y, pos.z);
       ring.material = ringMaterial;
+      ring.freezeWorldMatrix(); // Static mesh - only spins visually via material, no transform changes
 
       gameState.checkpoints.push({
         mesh: ring,
@@ -195,6 +227,7 @@
 
     skybox.material = skyboxMaterial;
     skybox.infiniteDistance = true;
+    skybox.freezeWorldMatrix(); // Static mesh - skip per-frame matrix recompute
   }
 
   // Create Ground
@@ -223,14 +256,22 @@
       ground.updateVerticesData(BABYLON.VertexBuffer.PositionKind, heightMap);
     }
 
+    ground.freezeWorldMatrix(); // Static mesh - skip per-frame matrix recompute
     return ground;
   }
 
   // Create Plane Mesh
   function createPlaneMesh(scene) {
-    // Create a simple plane model from primitives
+    // Create a simple plane model from primitives.
+    // Note: planeGroup.position must be a real BABYLON.Vector3 (not the plain
+    // {x,y,z} object in gameState.plane.position) since updateGame() calls
+    // .copyFromFloats() on it every frame instead of reallocating.
     const planeGroup = new BABYLON.TransformNode('planeGroup', scene);
-    planeGroup.position = gameState.plane.position;
+    planeGroup.position = new BABYLON.Vector3(
+      gameState.plane.position.x,
+      gameState.plane.position.y,
+      gameState.plane.position.z
+    );
 
     // Fuselage (main body)
     const fuselage = BABYLON.MeshBuilder.CreateCylinder('fuselage', { height: 15, diameter: 2, tessellation: 12 }, scene);
@@ -276,10 +317,14 @@
 
   // Setup Physics
   function setupPhysics(scene, planeMesh) {
-    // Create a shadow generator for better visuals
+    // Create a shadow generator for better visuals.
+    // planeMesh is a TransformNode (no geometry of its own) - only its actual
+    // child meshes can be registered as shadow casters, otherwise Babylon
+    // throws "getBoundingInfo is not a function" the first time it renders
+    // the shadow map, which silently kills the render loop.
     const light = scene.lights[0];
-    const shadowGenerator = new BABYLON.ShadowGenerator(2048, light);
-    shadowGenerator.addShadowCaster(planeMesh);
+    const shadowGenerator = new BABYLON.ShadowGenerator(1024, light);
+    planeMesh.getChildMeshes().forEach((mesh) => shadowGenerator.addShadowCaster(mesh));
     shadowGenerator.useBlurExponentialShadowMap = true;
   }
 
@@ -313,6 +358,11 @@
       gameState.startTime = Date.now();
     }
 
+    // Frame-rate independent time factor, normalized so 1.0 == 60fps.
+    // Clamped to avoid physics jumps after tab throttling/minimizing.
+    const rawDelta = gameState.engine ? gameState.engine.getDeltaTime() : 16.67;
+    const dt = BABYLON.Scalar.Clamp(rawDelta / (1000 / 60), 0, 3);
+
     // Update flight time
     gameState.flightTime = Math.floor((Date.now() - gameState.startTime) / 1000);
 
@@ -323,25 +373,25 @@
     gameState.score = Math.floor(gameState.maxAltitude * 10 + gameState.flightTime * 5);
 
     // Handle input
-    handleInput();
+    handleInput(dt);
 
     // Apply physics
-    updatePlanePhysics();
+    updatePlanePhysics(dt);
 
-    // Update plane mesh position and rotation
-    planeMesh.position = new BABYLON.Vector3(
+    // Update plane mesh position and rotation in place (no per-frame Vector3 allocation)
+    planeMesh.position.copyFromFloats(
       gameState.plane.position.x,
       gameState.plane.position.y,
       gameState.plane.position.z
     );
-    planeMesh.rotation = new BABYLON.Vector3(
+    planeMesh.rotation.copyFromFloats(
       gameState.plane.rotation.x,
       gameState.plane.rotation.y,
       gameState.plane.rotation.z
     );
 
     // Update camera to follow plane
-    updateCamera();
+    updateCamera(dt);
 
     // Check collisions
     checkCollisions();
@@ -351,19 +401,19 @@
   }
 
   // Handle Player Input
-  function handleInput() {
+  function handleInput(dt) {
     const keys = gameState.keys;
     const p = gameState.plane;
 
     // Throttle control - smoother acceleration/deceleration
     if (keys[' ']) {
-      p.throttle = Math.min(1, p.throttle + 0.03);
+      p.throttle = Math.min(1, p.throttle + 0.03 * dt);
     } else if (keys['shift']) {
-      p.throttle = Math.max(0, p.throttle - 0.03);
+      p.throttle = Math.max(0, p.throttle - 0.03 * dt);
     }
 
     // Pitch control (up/down rotation)
-    const pitchSensitivity = 0.04;
+    const pitchSensitivity = 0.04 * dt;
     const maxPitch = Math.PI / 2.5;
     let pitchInput = 0;
 
@@ -378,7 +428,7 @@
     p.rotation.x = BABYLON.Scalar.Clamp(p.rotation.x + pitchInput, -maxPitch, maxPitch);
 
     // Roll control (left/right rotation)
-    const rollSensitivity = 0.04;
+    const rollSensitivity = 0.04 * dt;
     const maxRoll = Math.PI / 3;
     let rollInput = 0;
 
@@ -392,12 +442,13 @@
     // Apply roll with smoothing
     p.rotation.z = BABYLON.Scalar.Clamp(p.rotation.z + rollInput, -maxRoll, maxRoll);
 
-    // Gradually return to neutral rotation when no input
-    p.rotation.x *= 0.92;
-    p.rotation.z *= 0.92;
+    // Gradually return to neutral rotation when no input (frame-rate independent decay)
+    const neutralDecay = Math.pow(0.92, dt);
+    p.rotation.x *= neutralDecay;
+    p.rotation.z *= neutralDecay;
 
     // Yaw control
-    const yawSensitivity = 0.03;
+    const yawSensitivity = 0.03 * dt;
     if (keys['q']) {
       p.rotation.y -= yawSensitivity;
     }
@@ -407,14 +458,16 @@
   }
 
   // Update Plane Physics
-  function updatePlanePhysics() {
+  function updatePlanePhysics(dt) {
     const p = gameState.plane;
     const minStallSpeed = 0.15;
 
     // Calculate speed based on throttle with acceleration curve
+    // (exponential smoothing formula keeps the lerp rate consistent regardless of frame rate)
     const maxSpeed = 1.5;
     const targetSpeed = p.throttle * maxSpeed;
-    p.speed = BABYLON.Scalar.Lerp(p.speed, targetSpeed, 0.1);
+    const speedLerpFactor = 1 - Math.pow(1 - 0.1, dt);
+    p.speed = BABYLON.Scalar.Lerp(p.speed, targetSpeed, speedLerpFactor);
 
     // Stall mechanics - too slow = loss of lift and control
     const isStalled = p.speed < minStallSpeed && p.rotation.x > 0.2;
@@ -425,48 +478,51 @@
     const pitchCos = Math.cos(p.rotation.x);
     const pitchSin = Math.sin(p.rotation.x);
 
-    // Velocity (forward direction)
+    // Velocity (forward direction) - these represent per-60fps-frame displacement,
+    // so they get scaled by dt once at the position-integration step below.
     const forwardMultiplier = isStalled ? 0.3 : 1;
     p.velocity.x = sin * cos * p.speed * pitchCos * forwardMultiplier;
     p.velocity.z = cos * cos * p.speed * pitchCos * forwardMultiplier;
 
     // Vertical component based on pitch - more sensitive
     const verticalComponent = isStalled ? pitchSin * 0.1 : pitchSin * p.speed * 0.4;
-    p.velocity.y += verticalComponent;
+    p.velocity.y += verticalComponent * dt;
 
-    // Apply drag (speed dependent)
+    // Apply drag (speed dependent, frame-rate independent decay)
     const speedDrag = p.speed * 0.01;
-    p.velocity.y *= (1 - p.drag - speedDrag);
-    p.velocity.x *= (1 - p.drag * 0.3 - speedDrag * 0.5);
-    p.velocity.z *= (1 - p.drag * 0.3 - speedDrag * 0.5);
+    const dragFactorY = Math.pow(1 - p.drag - speedDrag, dt);
+    const dragFactorXZ = Math.pow(1 - p.drag * 0.3 - speedDrag * 0.5, dt);
+    p.velocity.y *= dragFactorY;
+    p.velocity.x *= dragFactorXZ;
+    p.velocity.z *= dragFactorXZ;
 
     // Apply lift (higher speed = more lift to counteract gravity)
     const liftForce = p.speed * p.lift;
     if (p.speed > minStallSpeed) {
-      p.velocity.y += liftForce;
+      p.velocity.y += liftForce * dt;
     } else if (!isStalled) {
       // Minimal lift when slow but not stalled
-      p.velocity.y += liftForce * 0.3;
+      p.velocity.y += liftForce * 0.3 * dt;
     }
 
     // Apply gravity
     const gravityForce = isStalled ? 0.015 : 0.01;
-    p.velocity.y -= gravityForce;
+    p.velocity.y -= gravityForce * dt;
 
     // Terminal velocity limit
     p.velocity.y = Math.max(p.velocity.y, -0.5);
 
-    // Update position
-    p.position.x += p.velocity.x;
-    p.position.y += p.velocity.y;
-    p.position.z += p.velocity.z;
+    // Update position (velocity.x/z already represent per-frame displacement at 60fps baseline)
+    p.position.x += p.velocity.x * dt;
+    p.position.y += p.velocity.y * dt;
+    p.position.z += p.velocity.z * dt;
 
     // Store stall state for HUD
     gameState.plane.isStalled = isStalled;
   }
 
   // Update Camera
-  function updateCamera() {
+  function updateCamera(dt) {
     const scene = gameState.scene;
     const camera = scene.cameras[0];
     const p = gameState.plane.position;
@@ -474,51 +530,39 @@
 
     if (gameState.cameraMode === 'cockpit') {
       // Cockpit view - from inside the plane
-      const cockpitX = p.x + Math.sin(rotY) * 3;
-      const cockpitY = p.y + 2;
-      const cockpitZ = p.z + Math.cos(rotY) * 3;
-
-      camera.position = BABYLON.Vector3.Lerp(
-        camera.position,
-        new BABYLON.Vector3(cockpitX, cockpitY, cockpitZ),
-        0.2
+      _scratchTarget.copyFromFloats(
+        p.x + Math.sin(rotY) * 3,
+        p.y + 2,
+        p.z + Math.cos(rotY) * 3
       );
+      BABYLON.Vector3.LerpToRef(camera.position, _scratchTarget, 1 - Math.pow(1 - 0.2, dt), camera.position);
 
       // Look ahead in flight direction
-      const lookAheadX = p.x + Math.sin(rotY) * 100;
-      const lookAheadZ = p.z + Math.cos(rotY) * 100;
-      const lookTarget = new BABYLON.Vector3(
-        lookAheadX,
+      _scratchLookTarget.copyFromFloats(
+        p.x + Math.sin(rotY) * 100,
         p.y + Math.sin(gameState.plane.rotation.x) * 50,
-        lookAheadZ
+        p.z + Math.cos(rotY) * 100
       );
-
-      camera.setTarget(
-        BABYLON.Vector3.Lerp(camera.getTarget(), lookTarget, 0.1)
-      );
+      const currentTarget = camera.getTarget();
+      BABYLON.Vector3.LerpToRef(currentTarget, _scratchLookTarget, 1 - Math.pow(1 - 0.1, dt), currentTarget);
+      camera.setTarget(currentTarget);
     } else {
       // Chase camera view - behind and above the plane
       const distance = 80;
       const height = 40;
 
-      const cameraX = p.x - Math.sin(rotY) * distance;
-      const cameraY = p.y + height;
-      const cameraZ = p.z - Math.cos(rotY) * distance;
-
-      camera.position = BABYLON.Vector3.Lerp(
-        camera.position,
-        new BABYLON.Vector3(cameraX, cameraY, cameraZ),
-        0.1
+      _scratchTarget.copyFromFloats(
+        p.x - Math.sin(rotY) * distance,
+        p.y + height,
+        p.z - Math.cos(rotY) * distance
       );
+      BABYLON.Vector3.LerpToRef(camera.position, _scratchTarget, 1 - Math.pow(1 - 0.1, dt), camera.position);
 
       // Look at a point ahead of the plane
-      const lookAheadX = p.x + Math.sin(rotY) * 50;
-      const lookAheadZ = p.z + Math.cos(rotY) * 50;
-      const lookTarget = new BABYLON.Vector3(lookAheadX, p.y + 10, lookAheadZ);
-
-      camera.setTarget(
-        BABYLON.Vector3.Lerp(camera.getTarget(), lookTarget, 0.05)
-      );
+      _scratchLookTarget.copyFromFloats(p.x + Math.sin(rotY) * 50, p.y + 10, p.z + Math.cos(rotY) * 50);
+      const currentTarget = camera.getTarget();
+      BABYLON.Vector3.LerpToRef(currentTarget, _scratchLookTarget, 1 - Math.pow(1 - 0.05, dt), currentTarget);
+      camera.setTarget(currentTarget);
     }
   }
 
@@ -528,16 +572,20 @@
 
     const p = gameState.plane.position;
 
+    let allPassed = true;
+
     gameState.checkpoints.forEach((checkpoint) => {
       if (checkpoint.passed) return; // Already passed this checkpoint
 
-      const dist = Math.sqrt(
+      allPassed = false;
+
+      // Compare squared distance to avoid a Math.sqrt call per checkpoint per frame
+      const distSq =
         (p.x - checkpoint.position.x) ** 2 +
         (p.y - checkpoint.position.y) ** 2 +
-        (p.z - checkpoint.position.z) ** 2
-      );
+        (p.z - checkpoint.position.z) ** 2;
 
-      if (dist < checkpoint.radius) {
+      if (distSq < checkpoint.radius * checkpoint.radius) {
         // Checkpoint passed!
         checkpoint.passed = true;
         checkpoint.mesh.material.emissiveColor = new BABYLON.Color3(1, 1, 0); // Yellow
@@ -545,6 +593,13 @@
         playCheckpointSound();
       }
     });
+
+    // All checkpoints cleared - one-time big bonus
+    if (allPassed && !gameState.allCheckpointsBonusGiven) {
+      gameState.allCheckpointsBonusGiven = true;
+      gameState.score += 2000;
+      playCheckpointSound();
+    }
   }
 
   // Check Collisions
@@ -560,6 +615,7 @@
         gameState.planeMesh.position.y = groundLevel;
         displayGameOver();
         playCrashSound();
+        saveBestScore();
       } else {
         // Soft landing - just touch ground gently
         p.position.y = groundLevel;
@@ -579,8 +635,16 @@
 
   // Display Game Over Message
   function displayGameOver() {
-    const gameOverText = document.getElementById('gameOverText');
-    gameOverText.style.display = 'block';
+    dom.gameOverText.style.display = 'block';
+  }
+
+  // Save Best Score to localStorage
+  function saveBestScore() {
+    if (gameState.score > gameState.bestScore) {
+      gameState.bestScore = gameState.score;
+      localStorage.setItem('planeGameBestScore', String(gameState.bestScore));
+      if (dom.bestScore) dom.bestScore.textContent = gameState.bestScore;
+    }
   }
 
   // Restart Game
@@ -599,6 +663,8 @@
     gameState.plane.throttle = 0;
     gameState.plane.isStalled = false;
 
+    gameState.allCheckpointsBonusGiven = false;
+
     // Reset checkpoints
     if (gameState.checkpoints) {
       gameState.checkpoints.forEach((checkpoint) => {
@@ -607,7 +673,16 @@
       });
     }
 
-    document.getElementById('gameOverText').style.display = 'none';
+    dom.gameOverText.style.display = 'none';
+  }
+
+  // Set text content only when the value actually changed, to avoid needless
+  // DOM writes/reflow on every rendered frame (HUD numbers change slowly).
+  function setHudText(key, el, text) {
+    if (lastHudText[key] !== text) {
+      lastHudText[key] = text;
+      el.textContent = text;
+    }
   }
 
   // Update HUD
@@ -616,26 +691,32 @@
     const speedKmh = Math.floor(p.speed * 500);
     const altitudeM = Math.max(0, Math.floor(p.position.y));
 
-    // Update altitude
-    const altEl = document.getElementById('altitude');
-    altEl.textContent = altitudeM + 'm';
+    setHudText('altitude', dom.altitude, altitudeM + 'm');
 
     // Update speed with visual warning
     let speedText = speedKmh + ' km/h';
-    const speedEl = document.getElementById('speed');
+    let speedColor;
     if (p.isStalled) {
       speedText = speedKmh + ' km/h ⚠️ STALL';
-      speedEl.style.color = '#ff4444';
+      speedColor = '#ff4444';
     } else if (p.speed < 0.25) {
-      speedEl.style.color = '#ffaa00'; // Orange for low speed
+      speedColor = '#ffaa00'; // Orange for low speed
     } else {
-      speedEl.style.color = '#00ff00'; // Green for normal speed
+      speedColor = '#00ff00'; // Green for normal speed
     }
-    speedEl.textContent = speedText;
+    if (lastHudText.speedColor !== speedColor) {
+      lastHudText.speedColor = speedColor;
+      dom.speed.style.color = speedColor;
+    }
+    setHudText('speed', dom.speed, speedText);
 
-    document.getElementById('heading').textContent = Math.round((p.rotation.y * 180) / Math.PI) + '°';
-    document.getElementById('flightTime').textContent = gameState.flightTime + 's';
-    document.getElementById('score').textContent = gameState.score;
+    setHudText('heading', dom.heading, Math.round((p.rotation.y * 180) / Math.PI) + '°');
+    setHudText('flightTime', dom.flightTime, gameState.flightTime + 's');
+    setHudText('score', dom.score, String(gameState.score));
+
+    if (dom.fps) {
+      setHudText('fps', dom.fps, Math.round(gameState.engine.getFps()) + ' FPS');
+    }
   }
 
   // Initialize when DOM is ready
