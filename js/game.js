@@ -44,6 +44,7 @@
     // Setup game physics and controls
     setupPhysics(scene, planeMesh);
     setupControls();
+    createCheckpoints(scene);
 
     // Game loop
     engine.runRenderLoop(() => {
@@ -61,6 +62,39 @@
     gameState.engine = engine;
     gameState.scene = scene;
     gameState.planeMesh = planeMesh;
+  }
+
+  // Create Checkpoints (rings to fly through)
+  function createCheckpoints(scene) {
+    gameState.checkpoints = [];
+
+    const checkpointPositions = [
+      { x: 200, y: 100, z: 0 },
+      { x: 400, y: 150, z: -200 },
+      { x: 200, y: 200, z: -400 },
+      { x: -200, y: 150, z: -200 },
+      { x: -400, y: 100, z: 0 },
+      { x: -200, y: 180, z: 300 },
+    ];
+
+    checkpointPositions.forEach((pos, index) => {
+      const ringMaterial = new BABYLON.StandardMaterial('ringMat' + index, scene);
+      ringMaterial.diffuse = new BABYLON.Color3(0.2, 1, 0.2);
+      ringMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.8, 0.1);
+      ringMaterial.alpha = 0.9;
+
+      // Create ring using torus
+      const ring = BABYLON.MeshBuilder.CreateTorus('ring' + index, { diameter: 60, thickness: 3 }, scene);
+      ring.position = new BABYLON.Vector3(pos.x, pos.y, pos.z);
+      ring.material = ringMaterial;
+
+      gameState.checkpoints.push({
+        mesh: ring,
+        position: pos,
+        passed: false,
+        radius: 35,
+      });
+    });
   }
 
   // Create Scene
@@ -88,14 +122,31 @@
   // Setup Lighting
   function setupLighting(scene) {
     // Directional Light (Sun)
-    const light = new BABYLON.DirectionalLight('sunlight', new BABYLON.Vector3(1, 1, 1));
-    light.intensity = 1;
-    light.position = new BABYLON.Vector3(100, 100, 100);
-    light.range = 5000;
+    const light = new BABYLON.DirectionalLight('sunlight', new BABYLON.Vector3(0.5, 1, 0.5));
+    light.intensity = 1.2;
+    light.position = new BABYLON.Vector3(200, 200, 200);
+    light.range = 8000;
 
     // Ambient Light
     const ambientLight = new BABYLON.HemisphericLight('ambientLight', new BABYLON.Vector3(0, 1, 0));
-    ambientLight.intensity = 0.6;
+    ambientLight.intensity = 0.7;
+    ambientLight.diffuse = new BABYLON.Color3(0.8, 0.9, 1);
+    ambientLight.specular = new BABYLON.Color3(0.5, 0.5, 0.5);
+
+    // Create skybox
+    createSkybox(scene);
+  }
+
+  // Create Skybox
+  function createSkybox(scene) {
+    const skybox = BABYLON.MeshBuilder.CreateBox('skyBox', { size: 3000 }, scene);
+
+    const skyboxMaterial = new BABYLON.StandardMaterial('skybox', scene);
+    skyboxMaterial.emissiveColor = new BABYLON.Color3(0.7, 0.85, 1);
+    skyboxMaterial.backFaceCulling = false;
+
+    skybox.material = skyboxMaterial;
+    skybox.infiniteDistance = true;
   }
 
   // Create Ground
@@ -241,6 +292,9 @@
 
     // Check collisions
     checkCollisions();
+
+    // Check checkpoint passages
+    checkCheckpoints();
   }
 
   // Handle Player Input
@@ -390,6 +444,30 @@
     );
   }
 
+  // Check Checkpoints
+  function checkCheckpoints() {
+    if (!gameState.checkpoints) return;
+
+    const p = gameState.plane.position;
+
+    gameState.checkpoints.forEach((checkpoint) => {
+      if (checkpoint.passed) return; // Already passed this checkpoint
+
+      const dist = Math.sqrt(
+        (p.x - checkpoint.position.x) ** 2 +
+        (p.y - checkpoint.position.y) ** 2 +
+        (p.z - checkpoint.position.z) ** 2
+      );
+
+      if (dist < checkpoint.radius) {
+        // Checkpoint passed!
+        checkpoint.passed = true;
+        checkpoint.mesh.material.emissiveColor = new BABYLON.Color3(1, 1, 0); // Yellow
+        gameState.score += 500; // Bonus for passing checkpoint
+      }
+    });
+  }
+
   // Check Collisions
   function checkCollisions() {
     const p = gameState.plane;
@@ -440,6 +518,14 @@
     gameState.plane.speed = 0;
     gameState.plane.throttle = 0;
     gameState.plane.isStalled = false;
+
+    // Reset checkpoints
+    if (gameState.checkpoints) {
+      gameState.checkpoints.forEach((checkpoint) => {
+        checkpoint.passed = false;
+        checkpoint.mesh.material.emissiveColor = new BABYLON.Color3(0.1, 0.8, 0.1); // Green
+      });
+    }
 
     document.getElementById('gameOverText').style.display = 'none';
   }
