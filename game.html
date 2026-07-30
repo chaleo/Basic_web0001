@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="css/style.css" />
+    <link rel="stylesheet" href="css/game-styles.css" />
+    <title>Plane Simulation - Creative Agency</title>
+  </head>
+  <body>
+    <header>
+      <div class="logo">Creative Agency</div>
+      <div class="toggle"></div>
+      <div class="navigation">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="services.html">Services</a></li>
+          <li><a href="work.html">Work</a></li>
+          <li><a href="contact.html">Contact</a></li>
+          <li><a href="game.html">Game</a></li>
+        </ul>
+        <div class="social-bar">
+          <ul>
+            <li>
+              <a href="https://facebook.com">
+                <img src="images/facebook.png" target="_blank" alt="" />
+              </a>
+            </li>
+            <li>
+              <a href="https://twitter.com">
+                <img src="images/twitter.png" target="_blank" alt="" />
+              </a>
+            </li>
+            <li>
+              <a href="https://instagram.com">
+                <img src="images/instagram.png" target="_blank" alt="" />
+              </a>
+            </li>
+          </ul>
+          <a href="mailto:you@email.com" class="email-icon">
+            <img src="images/email.png" alt="" />
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <section class="game-container">
+      <canvas id="gameCanvas"></canvas>
+      <div class="game-hud">
+        <div class="hud-left">
+          <div class="hud-item">
+            <span class="hud-label">Altitude</span>
+            <span class="hud-value" id="altitude">0m</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">Speed</span>
+            <span class="hud-value" id="speed">0 km/h</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">Heading</span>
+            <span class="hud-value" id="heading">0°</span>
+          </div>
+        </div>
+        <div class="hud-right">
+          <div class="hud-item">
+            <span class="hud-label">Flight Time</span>
+            <span class="hud-value" id="flightTime">0s</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls-hint" id="controlsHint">
+        <h3>Controls</h3>
+        <p>↑/W: Pitch Up | ↓/S: Pitch Down</p>
+        <p>←/A: Roll Left | →/D: Roll Right</p>
+        <p>Space: Throttle Up | Shift: Throttle Down</p>
+        <p class="game-over-text" id="gameOverText" style="display: none;">
+          <strong>CRASHED!</strong> Press R to Restart
+        </p>
+      </div>
+    </section>
+
+    <!-- Babylon.js CDN -->
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+    <script src="js/script.js"></script>
+    <script src="js/game.js"></script>
+  </body>
+</html>
