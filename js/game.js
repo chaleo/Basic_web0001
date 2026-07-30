@@ -10,6 +10,8 @@
     isCrashed: false,
     flightTime: 0,
     startTime: null,
+    maxAltitude: 0,
+    score: 0,
 
     // Plane Physics
     plane: {
@@ -21,6 +23,7 @@
       mass: 1000,
       drag: 0.02,
       lift: 0.08,
+      isStalled: false,
     },
 
     // Input
@@ -100,11 +103,26 @@
     const groundMaterial = new BABYLON.StandardMaterial('groundMat', scene);
     groundMaterial.diffuse = new BABYLON.Color3(0.2, 0.8, 0.2);
     groundMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.5, 0.1);
+    groundMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
 
-    const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 5000, height: 5000 }, scene);
+    // Create ground with more subdivisions for better collision
+    const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 5000, height: 5000, subdivisions: 50 }, scene);
     ground.material = groundMaterial;
     ground.checkCollisions = true;
     ground.position.y = 0;
+
+    // Add some visual terrain variation
+    const heightMap = ground.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+    if (heightMap) {
+      for (let i = 0; i < heightMap.length; i += 3) {
+        // Add subtle rolling hills
+        const x = heightMap[i];
+        const z = heightMap[i + 2];
+        const noise = Math.sin(x * 0.01) * Math.cos(z * 0.01) * 2;
+        heightMap[i + 1] = noise;
+      }
+      ground.updateVerticesData(BABYLON.VertexBuffer.PositionKind, heightMap);
+    }
 
     return ground;
   }
@@ -116,10 +134,12 @@
     planeGroup.position = gameState.plane.position;
 
     // Fuselage (main body)
-    const fuselage = BABYLON.MeshBuilder.CreateCylinder('fuselage', { height: 15, diameter: 2, tessellation: 8 }, scene);
+    const fuselage = BABYLON.MeshBuilder.CreateCylinder('fuselage', { height: 15, diameter: 2, tessellation: 12 }, scene);
     fuselage.parent = planeGroup;
     const fuselageMat = new BABYLON.StandardMaterial('fuselageMat', scene);
-    fuselageMat.diffuse = new BABYLON.Color3(0.8, 0.2, 0.2);
+    fuselageMat.diffuse = new BABYLON.Color3(0.9, 0.1, 0.1);
+    fuselageMat.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
+    fuselageMat.emissiveColor = new BABYLON.Color3(0.2, 0, 0);
     fuselage.material = fuselageMat;
     fuselage.rotation.z = Math.PI / 2;
 
@@ -192,6 +212,12 @@
     // Update flight time
     gameState.flightTime = Math.floor((Date.now() - gameState.startTime) / 1000);
 
+    // Track max altitude
+    gameState.maxAltitude = Math.max(gameState.maxAltitude, gameState.plane.position.y);
+
+    // Calculate score (altitude + time)
+    gameState.score = Math.floor(gameState.maxAltitude * 10 + gameState.flightTime * 5);
+
     // Handle input
     handleInput();
 
@@ -220,43 +246,71 @@
   // Handle Player Input
   function handleInput() {
     const keys = gameState.keys;
+    const p = gameState.plane;
 
-    // Throttle control
-    if (keys[' '] || keys['w'] || keys['arrowup']) {
-      gameState.plane.throttle = Math.min(1, gameState.plane.throttle + 0.02);
-    }
-    if (keys['shift'] || keys['s'] || keys['arrowdown']) {
-      gameState.plane.throttle = Math.max(0, gameState.plane.throttle - 0.02);
+    // Throttle control - smoother acceleration/deceleration
+    if (keys[' ']) {
+      p.throttle = Math.min(1, p.throttle + 0.03);
+    } else if (keys['shift']) {
+      p.throttle = Math.max(0, p.throttle - 0.03);
     }
 
     // Pitch control (up/down rotation)
+    const pitchSensitivity = 0.04;
+    const maxPitch = Math.PI / 2.5;
+    let pitchInput = 0;
+
     if (keys['arrowup'] || keys['w']) {
-      gameState.plane.rotation.x = Math.max(gameState.plane.rotation.x - 0.05, -Math.PI / 3);
+      pitchInput -= pitchSensitivity;
     }
     if (keys['arrowdown'] || keys['s']) {
-      gameState.plane.rotation.x = Math.min(gameState.plane.rotation.x + 0.05, Math.PI / 3);
+      pitchInput += pitchSensitivity;
     }
+
+    // Apply pitch with smoothing
+    p.rotation.x = BABYLON.Scalar.Clamp(p.rotation.x + pitchInput, -maxPitch, maxPitch);
 
     // Roll control (left/right rotation)
+    const rollSensitivity = 0.04;
+    const maxRoll = Math.PI / 3;
+    let rollInput = 0;
+
     if (keys['arrowleft'] || keys['a']) {
-      gameState.plane.rotation.z = Math.min(gameState.plane.rotation.z + 0.05, Math.PI / 4);
+      rollInput += rollSensitivity;
     }
     if (keys['arrowright'] || keys['d']) {
-      gameState.plane.rotation.z = Math.max(gameState.plane.rotation.z - 0.05, -Math.PI / 4);
+      rollInput -= rollSensitivity;
     }
 
+    // Apply roll with smoothing
+    p.rotation.z = BABYLON.Scalar.Clamp(p.rotation.z + rollInput, -maxRoll, maxRoll);
+
     // Gradually return to neutral rotation when no input
-    gameState.plane.rotation.x *= 0.95;
-    gameState.plane.rotation.z *= 0.95;
+    p.rotation.x *= 0.92;
+    p.rotation.z *= 0.92;
+
+    // Yaw control
+    const yawSensitivity = 0.03;
+    if (keys['q']) {
+      p.rotation.y -= yawSensitivity;
+    }
+    if (keys['e']) {
+      p.rotation.y += yawSensitivity;
+    }
   }
 
   // Update Plane Physics
   function updatePlanePhysics() {
     const p = gameState.plane;
+    const minStallSpeed = 0.15;
 
-    // Calculate speed based on throttle
+    // Calculate speed based on throttle with acceleration curve
     const maxSpeed = 1.5;
-    p.speed = p.throttle * maxSpeed;
+    const targetSpeed = p.throttle * maxSpeed;
+    p.speed = BABYLON.Scalar.Lerp(p.speed, targetSpeed, 0.1);
+
+    // Stall mechanics - too slow = loss of lift and control
+    const isStalled = p.speed < minStallSpeed && p.rotation.x > 0.2;
 
     // Calculate forward direction based on rotation
     const cos = Math.cos(p.rotation.y);
@@ -265,36 +319,43 @@
     const pitchSin = Math.sin(p.rotation.x);
 
     // Velocity (forward direction)
-    p.velocity.x = sin * cos * p.speed * pitchCos;
-    p.velocity.z = cos * cos * p.speed * pitchCos;
-    p.velocity.y += pitchSin * p.speed * 0.3; // Vertical component based on pitch
+    const forwardMultiplier = isStalled ? 0.3 : 1;
+    p.velocity.x = sin * cos * p.speed * pitchCos * forwardMultiplier;
+    p.velocity.z = cos * cos * p.speed * pitchCos * forwardMultiplier;
 
-    // Apply drag
-    p.velocity.y *= (1 - p.drag);
-    p.velocity.x *= (1 - p.drag * 0.5);
-    p.velocity.z *= (1 - p.drag * 0.5);
+    // Vertical component based on pitch - more sensitive
+    const verticalComponent = isStalled ? pitchSin * 0.1 : pitchSin * p.speed * 0.4;
+    p.velocity.y += verticalComponent;
+
+    // Apply drag (speed dependent)
+    const speedDrag = p.speed * 0.01;
+    p.velocity.y *= (1 - p.drag - speedDrag);
+    p.velocity.x *= (1 - p.drag * 0.3 - speedDrag * 0.5);
+    p.velocity.z *= (1 - p.drag * 0.3 - speedDrag * 0.5);
 
     // Apply lift (higher speed = more lift to counteract gravity)
     const liftForce = p.speed * p.lift;
-    if (p.speed > 0.2) {
+    if (p.speed > minStallSpeed) {
       p.velocity.y += liftForce;
+    } else if (!isStalled) {
+      // Minimal lift when slow but not stalled
+      p.velocity.y += liftForce * 0.3;
     }
 
     // Apply gravity
-    p.velocity.y -= 0.01;
+    const gravityForce = isStalled ? 0.015 : 0.01;
+    p.velocity.y -= gravityForce;
+
+    // Terminal velocity limit
+    p.velocity.y = Math.max(p.velocity.y, -0.5);
 
     // Update position
     p.position.x += p.velocity.x;
     p.position.y += p.velocity.y;
     p.position.z += p.velocity.z;
 
-    // Handle heading rotation (continuous yaw)
-    if (gameState.keys['q']) {
-      p.rotation.y -= 0.05;
-    }
-    if (gameState.keys['e']) {
-      p.rotation.y += 0.05;
-    }
+    // Store stall state for HUD
+    gameState.plane.isStalled = isStalled;
   }
 
   // Update Camera
@@ -332,12 +393,29 @@
   // Check Collisions
   function checkCollisions() {
     const p = gameState.plane;
+    const groundLevel = 0.5;
 
-    if (p.position.y <= 1) {
-      // Crashed into ground
-      gameState.isCrashed = true;
-      gameState.planeMesh.position.y = 1;
-      displayGameOver();
+    // Crash if hitting ground
+    if (p.position.y <= groundLevel) {
+      // Check velocity to avoid bouncing
+      if (p.velocity.y < -0.1) {
+        gameState.isCrashed = true;
+        gameState.planeMesh.position.y = groundLevel;
+        displayGameOver();
+      } else {
+        // Soft landing - just touch ground gently
+        p.position.y = groundLevel;
+        p.velocity.y = 0;
+      }
+    }
+
+    // Keep plane within reasonable bounds (prevent flying too far away)
+    const maxDistance = 2500;
+    const distance = Math.sqrt(p.position.x ** 2 + p.position.z ** 2);
+    if (distance > maxDistance) {
+      const angle = Math.atan2(p.position.z, p.position.x);
+      p.position.x = Math.cos(angle) * maxDistance;
+      p.position.z = Math.sin(angle) * maxDistance;
     }
   }
 
@@ -353,12 +431,15 @@
     gameState.isCrashed = false;
     gameState.flightTime = 0;
     gameState.startTime = null;
+    gameState.maxAltitude = 0;
+    gameState.score = 0;
 
     gameState.plane.position = { x: 0, y: 50, z: 0 };
     gameState.plane.velocity = { x: 0, y: 0, z: 0 };
     gameState.plane.rotation = { x: 0, y: 0, z: 0 };
     gameState.plane.speed = 0;
     gameState.plane.throttle = 0;
+    gameState.plane.isStalled = false;
 
     document.getElementById('gameOverText').style.display = 'none';
   }
@@ -366,11 +447,21 @@
   // Update HUD
   function updateHUD() {
     const p = gameState.plane;
+    const speedKmh = Math.floor(p.speed * 500);
+    const altitudeM = Math.max(0, Math.floor(p.position.y));
 
-    document.getElementById('altitude').textContent = Math.max(0, Math.floor(p.position.y)) + 'm';
-    document.getElementById('speed').textContent = Math.floor(p.speed * 500) + ' km/h';
+    document.getElementById('altitude').textContent = altitudeM + 'm';
+
+    // Show stall warning if stalled
+    let speedText = speedKmh + ' km/h';
+    if (p.isStalled) {
+      speedText = speedKmh + ' km/h ⚠️ STALL';
+    }
+    document.getElementById('speed').textContent = speedText;
+
     document.getElementById('heading').textContent = Math.round((p.rotation.y * 180) / Math.PI) + '°';
     document.getElementById('flightTime').textContent = gameState.flightTime + 's';
+    document.getElementById('score').textContent = gameState.score;
   }
 
   // Initialize when DOM is ready
