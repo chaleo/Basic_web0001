@@ -29,12 +29,60 @@
     // Input
     keys: {},
     gameOverText: null,
+    cameraMode: 'chase', // 'chase' or 'cockpit'
+
+    // Audio
+    audioContext: null,
   };
+
+  // Audio Functions (Web Audio API)
+  function initAudio() {
+    if (!gameState.audioContext) {
+      gameState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  }
+
+  function playSound(frequency, duration, type = 'sine') {
+    if (!gameState.audioContext) return;
+
+    const ctx = gameState.audioContext;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.frequency.value = frequency;
+    osc.type = type;
+
+    gain.gain.setValueAtTime(0.05, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + duration);
+  }
+
+  function playCheckpointSound() {
+    if (!gameState.audioContext) return;
+    // Play ascending tone for checkpoint
+    playSound(600, 0.1, 'sine');
+    setTimeout(() => playSound(800, 0.1, 'sine'), 100);
+  }
+
+  function playCrashSound() {
+    if (!gameState.audioContext) return;
+    // Play low descending tone for crash
+    playSound(200, 0.3, 'sine');
+    setTimeout(() => playSound(100, 0.2, 'sine'), 150);
+  }
 
   // Initialize Game
   function init() {
     const canvas = document.getElementById('gameCanvas');
     const engine = new BABYLON.Engine(canvas, true);
+
+    // Initialize audio
+    initAudio();
 
     const scene = createScene(engine, canvas);
     setupLighting(scene);
@@ -239,10 +287,15 @@
   function setupControls() {
     document.addEventListener('keydown', (e) => {
       gameState.keys[e.key.toLowerCase()] = true;
-      if (e.key === 'r' || e.key === 'R') {
+
+      const key = e.key.toLowerCase();
+      if (key === 'r') {
         if (gameState.isCrashed) {
           restartGame();
         }
+      } else if (key === 'c') {
+        // Toggle camera mode
+        gameState.cameraMode = gameState.cameraMode === 'chase' ? 'cockpit' : 'chase';
       }
     });
 
@@ -417,31 +470,56 @@
     const scene = gameState.scene;
     const camera = scene.cameras[0];
     const p = gameState.plane.position;
-
-    // Calculate camera position behind and above the plane
-    const distance = 80;
-    const height = 40;
     const rotY = gameState.plane.rotation.y;
 
-    const cameraX = p.x - Math.sin(rotY) * distance;
-    const cameraY = p.y + height;
-    const cameraZ = p.z - Math.cos(rotY) * distance;
+    if (gameState.cameraMode === 'cockpit') {
+      // Cockpit view - from inside the plane
+      const cockpitX = p.x + Math.sin(rotY) * 3;
+      const cockpitY = p.y + 2;
+      const cockpitZ = p.z + Math.cos(rotY) * 3;
 
-    // Smooth camera movement
-    camera.position = BABYLON.Vector3.Lerp(
-      camera.position,
-      new BABYLON.Vector3(cameraX, cameraY, cameraZ),
-      0.1
-    );
+      camera.position = BABYLON.Vector3.Lerp(
+        camera.position,
+        new BABYLON.Vector3(cockpitX, cockpitY, cockpitZ),
+        0.2
+      );
 
-    // Look at a point ahead of the plane
-    const lookAheadX = p.x + Math.sin(rotY) * 50;
-    const lookAheadZ = p.z + Math.cos(rotY) * 50;
-    const lookTarget = new BABYLON.Vector3(lookAheadX, p.y + 10, lookAheadZ);
+      // Look ahead in flight direction
+      const lookAheadX = p.x + Math.sin(rotY) * 100;
+      const lookAheadZ = p.z + Math.cos(rotY) * 100;
+      const lookTarget = new BABYLON.Vector3(
+        lookAheadX,
+        p.y + Math.sin(gameState.plane.rotation.x) * 50,
+        lookAheadZ
+      );
 
-    camera.setTarget(
-      BABYLON.Vector3.Lerp(camera.getTarget(), lookTarget, 0.05)
-    );
+      camera.setTarget(
+        BABYLON.Vector3.Lerp(camera.getTarget(), lookTarget, 0.1)
+      );
+    } else {
+      // Chase camera view - behind and above the plane
+      const distance = 80;
+      const height = 40;
+
+      const cameraX = p.x - Math.sin(rotY) * distance;
+      const cameraY = p.y + height;
+      const cameraZ = p.z - Math.cos(rotY) * distance;
+
+      camera.position = BABYLON.Vector3.Lerp(
+        camera.position,
+        new BABYLON.Vector3(cameraX, cameraY, cameraZ),
+        0.1
+      );
+
+      // Look at a point ahead of the plane
+      const lookAheadX = p.x + Math.sin(rotY) * 50;
+      const lookAheadZ = p.z + Math.cos(rotY) * 50;
+      const lookTarget = new BABYLON.Vector3(lookAheadX, p.y + 10, lookAheadZ);
+
+      camera.setTarget(
+        BABYLON.Vector3.Lerp(camera.getTarget(), lookTarget, 0.05)
+      );
+    }
   }
 
   // Check Checkpoints
@@ -464,6 +542,7 @@
         checkpoint.passed = true;
         checkpoint.mesh.material.emissiveColor = new BABYLON.Color3(1, 1, 0); // Yellow
         gameState.score += 500; // Bonus for passing checkpoint
+        playCheckpointSound();
       }
     });
   }
@@ -480,6 +559,7 @@
         gameState.isCrashed = true;
         gameState.planeMesh.position.y = groundLevel;
         displayGameOver();
+        playCrashSound();
       } else {
         // Soft landing - just touch ground gently
         p.position.y = groundLevel;
@@ -536,14 +616,22 @@
     const speedKmh = Math.floor(p.speed * 500);
     const altitudeM = Math.max(0, Math.floor(p.position.y));
 
-    document.getElementById('altitude').textContent = altitudeM + 'm';
+    // Update altitude
+    const altEl = document.getElementById('altitude');
+    altEl.textContent = altitudeM + 'm';
 
-    // Show stall warning if stalled
+    // Update speed with visual warning
     let speedText = speedKmh + ' km/h';
+    const speedEl = document.getElementById('speed');
     if (p.isStalled) {
       speedText = speedKmh + ' km/h ⚠️ STALL';
+      speedEl.style.color = '#ff4444';
+    } else if (p.speed < 0.25) {
+      speedEl.style.color = '#ffaa00'; // Orange for low speed
+    } else {
+      speedEl.style.color = '#00ff00'; // Green for normal speed
     }
-    document.getElementById('speed').textContent = speedText;
+    speedEl.textContent = speedText;
 
     document.getElementById('heading').textContent = Math.round((p.rotation.y * 180) / Math.PI) + '°';
     document.getElementById('flightTime').textContent = gameState.flightTime + 's';
