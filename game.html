@@ -47,7 +47,8 @@
 
     <section class="game-container">
       <canvas id="gameCanvas"></canvas>
-      <div class="game-hud">
+
+      <div class="game-hud hidden" id="gameHud">
         <div class="hud-left">
           <div class="hud-item">
             <span class="hud-label">Altitude</span>
@@ -78,18 +79,69 @@
         </div>
       </div>
 
-      <div class="fps-counter" id="fpsCounter">
+      <div class="fps-counter hidden" id="fpsCounter">
         <span id="fps">0 FPS</span>
       </div>
 
-      <div class="controls-hint" id="controlsHint">
-        <h3>Controls & Objective</h3>
-        <p><strong>Flight:</strong> ↑/W: Pitch | ↓/S: Pitch | ←/A: Roll | →/D: Roll | Q/E: Turn</p>
-        <p><strong>Power:</strong> Space: Throttle ↑ | Shift: Throttle ↓ | C: Camera</p>
-        <p style="color: #0f0; margin-top: 8px;"><strong>🎯 Fly through green rings for +500 bonus!</strong></p>
-        <p class="game-over-text" id="gameOverText" style="display: none;">
-          <strong>CRASHED!</strong> Press R to Restart
-        </p>
+      <div class="controls-hint hidden" id="controlsHint">
+        <strong>W/S:</strong> Pitch &nbsp; <strong>A/D:</strong> Roll &nbsp; <strong>Q/E:</strong> Turn &nbsp;
+        <strong>Space/Shift:</strong> Throttle &nbsp; <strong>C:</strong> Camera
+      </div>
+
+      <!-- Main menu: plane selection + instructions, shown before flight starts -->
+      <div class="main-menu" id="mainMenu">
+        <div class="menu-panel">
+          <h1>✈️ Plane Simulation</h1>
+          <p class="menu-subtitle">Pick a plane and take off</p>
+
+          <div class="plane-select" id="planeSelect">
+            <button class="plane-card selected" data-plane="sport" type="button">
+              <span class="plane-card-name">Sport Plane</span>
+              <span class="plane-card-desc">Small and nimble. Balanced all-rounder.</span>
+            </button>
+            <button class="plane-card" data-plane="boeing747" type="button">
+              <span class="plane-card-name">Boeing 747</span>
+              <span class="plane-card-desc">Jumbo jet. Heavy, stable, slow to turn.</span>
+            </button>
+            <button class="plane-card" data-plane="a380" type="button">
+              <span class="plane-card-name">Airbus A380</span>
+              <span class="plane-card-desc">Biggest airliner. Huge lift, very slow to turn.</span>
+            </button>
+            <button class="plane-card" data-plane="concorde" type="button">
+              <span class="plane-card-name">Concorde</span>
+              <span class="plane-card-desc">Needle nose, delta wings. Very fast.</span>
+            </button>
+          </div>
+
+          <div class="menu-instructions">
+            <h3>How to Fly</h3>
+            <div class="instructions-grid">
+              <div><strong>W / ↑</strong> Nose down</div>
+              <div><strong>S / ↓</strong> Nose up</div>
+              <div><strong>A / ←</strong> Roll left</div>
+              <div><strong>D / →</strong> Roll right</div>
+              <div><strong>Q / E</strong> Turn left / right</div>
+              <div><strong>Space</strong> Throttle up</div>
+              <div><strong>Shift</strong> Throttle down</div>
+              <div><strong>C</strong> Toggle camera view</div>
+            </div>
+            <p class="menu-goal">🎯 Fly through the green rings for +500 points each — clear all 6 for a +2000 bonus!</p>
+          </div>
+
+          <button class="btn-start" id="startFlightBtn" type="button">Start Flight</button>
+        </div>
+      </div>
+
+      <!-- Crash screen: shown after hitting the ground -->
+      <div class="crash-overlay" id="crashOverlay" style="display: none;">
+        <div class="crash-panel">
+          <h2>💥 CRASHED!</h2>
+          <p id="crashScoreLine">Score: 0</p>
+          <div class="crash-buttons">
+            <button class="btn-start" id="restartBtn" type="button">Restart (R)</button>
+            <button class="btn-secondary" id="changePlaneBtn" type="button">Change Plane</button>
+          </div>
+        </div>
       </div>
     </section>
 

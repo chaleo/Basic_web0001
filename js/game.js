@@ -4,8 +4,77 @@
 (function() {
   'use strict';
 
+  // Plane types: each is built from the same handful of simple primitives
+  // (cylinders/boxes/cones - low tessellation, no imported models) so
+  // switching planes never adds real rendering cost. Stat multipliers apply
+  // on top of the baseline physics constants in gameState.plane.
+  const PLANE_TYPES = {
+    sport: {
+      name: 'Sport Plane',
+      description: 'Small and nimble. Balanced all-rounder.',
+      fuselageLength: 15,
+      fuselageDiameter: 2,
+      bodyColor: new BABYLON.Color3(0.9, 0.1, 0.1),
+      accentColor: new BABYLON.Color3(0.6, 0.2, 0.2),
+      wingStyle: 'straight',
+      wingSpan: 30,
+      wingDepth: 3,
+      tailHeight: 8,
+      noseStyle: 'sphere',
+      engineCount: 0,
+      stats: { speed: 1, lift: 1, turnRate: 1, drag: 1 },
+    },
+    boeing747: {
+      name: 'Boeing 747',
+      description: 'Jumbo jet. Heavy and stable, slow to turn.',
+      fuselageLength: 26,
+      fuselageDiameter: 3.2,
+      bodyColor: new BABYLON.Color3(0.95, 0.95, 0.97),
+      accentColor: new BABYLON.Color3(0.15, 0.35, 0.75),
+      wingStyle: 'straight',
+      wingSpan: 42,
+      wingDepth: 4,
+      tailHeight: 11,
+      noseStyle: 'hump',
+      engineCount: 4,
+      stats: { speed: 0.85, lift: 1.3, turnRate: 0.55, drag: 1.1 },
+    },
+    a380: {
+      name: 'Airbus A380',
+      description: 'The biggest airliner. Huge lift, very slow to turn.',
+      fuselageLength: 30,
+      fuselageDiameter: 4,
+      bodyColor: new BABYLON.Color3(0.95, 0.95, 0.97),
+      accentColor: new BABYLON.Color3(0.8, 0.15, 0.15),
+      wingStyle: 'straight',
+      wingSpan: 48,
+      wingDepth: 4.5,
+      tailHeight: 12,
+      noseStyle: 'sphere',
+      engineCount: 4,
+      stats: { speed: 0.8, lift: 1.4, turnRate: 0.45, drag: 1.15 },
+    },
+    concorde: {
+      name: 'Concorde',
+      description: 'Supersonic needle nose and delta wings. Very fast.',
+      fuselageLength: 28,
+      fuselageDiameter: 1.4,
+      bodyColor: new BABYLON.Color3(0.95, 0.95, 0.97),
+      accentColor: new BABYLON.Color3(0.15, 0.15, 0.15),
+      wingStyle: 'delta',
+      wingSpan: 20,
+      wingDepth: 14,
+      tailHeight: 9,
+      noseStyle: 'cone',
+      engineCount: 2,
+      stats: { speed: 1.6, lift: 0.7, turnRate: 0.9, drag: 0.85 },
+    },
+  };
+  const DEFAULT_PLANE_TYPE = 'sport';
+
   // Game State
   const gameState = {
+    gameStarted: false, // becomes true once "Start Flight" is clicked
     isFlying: false,
     isCrashed: false,
     flightTime: 0,
@@ -24,6 +93,11 @@
       lift: 0.08,
       isStalled: false,
     },
+
+    // Selected plane type and its stat multipliers (see PLANE_TYPES),
+    // applied on top of the baseline constants above.
+    selectedPlaneType: DEFAULT_PLANE_TYPE,
+    planeStats: PLANE_TYPES[DEFAULT_PLANE_TYPE].stats,
 
     // Input
     keys: {},
@@ -104,16 +178,17 @@
     const scene = createScene(engine, canvas);
     setupLighting(scene);
     createGround(scene);
-    const planeMesh = createPlaneMesh(scene);
-
-    // Setup game physics and controls
-    setupPhysics(scene, planeMesh);
-    setupControls();
     createCheckpoints(scene);
+
+    // The plane mesh itself is created lazily by startFlight() once the
+    // player picks a plane and clicks Start - the scene/ground/skybox render
+    // in the background behind the main menu in the meantime.
+    setupControls();
+    setupMenuControls();
 
     // Game loop
     engine.runRenderLoop(() => {
-      updateGame(planeMesh);
+      updateGame();
       updateHUD();
       scene.render();
     });
@@ -126,7 +201,66 @@
     // Store references for easy access
     gameState.engine = engine;
     gameState.scene = scene;
-    gameState.planeMesh = planeMesh;
+  }
+
+  // Wire up main menu (plane selection + Start) and crash-screen buttons
+  function setupMenuControls() {
+    const cards = dom.planeSelect.querySelectorAll('.plane-card');
+    cards.forEach((card) => {
+      card.addEventListener('click', () => {
+        cards.forEach((c) => c.classList.remove('selected'));
+        card.classList.add('selected');
+        gameState.selectedPlaneType = card.dataset.plane;
+      });
+    });
+
+    dom.startFlightBtn.addEventListener('click', () => {
+      // Audio contexts often start suspended until a user gesture - Start
+      // Flight is one, so make sure sound actually plays.
+      if (gameState.audioContext && gameState.audioContext.state === 'suspended') {
+        gameState.audioContext.resume();
+      }
+      startFlight(gameState.selectedPlaneType);
+    });
+
+    dom.restartBtn.addEventListener('click', restartGame);
+    dom.changePlaneBtn.addEventListener('click', changePlane);
+  }
+
+  // Create (or replace) the flyable plane mesh for the given type and begin
+  // the flight, hiding the menu and revealing the HUD.
+  function startFlight(typeKey) {
+    gameState.selectedPlaneType = typeKey;
+    gameState.planeStats = (PLANE_TYPES[typeKey] || PLANE_TYPES[DEFAULT_PLANE_TYPE]).stats;
+
+    resetPlaneState();
+
+    if (gameState.planeMesh) {
+      gameState.planeMesh.dispose();
+    }
+    gameState.planeMesh = createPlaneMesh(gameState.scene, typeKey);
+    setupPhysics(gameState.scene, gameState.planeMesh);
+
+    dom.mainMenu.classList.add('hidden');
+    dom.crashOverlay.style.display = 'none';
+    dom.gameHud.classList.remove('hidden');
+    dom.controlsHint.classList.remove('hidden');
+    dom.fpsCounterBox.classList.remove('hidden');
+
+    gameState.gameStarted = true;
+  }
+
+  // Hide the HUD and return to the main menu so the player can pick a
+  // different plane; the actual mesh swap happens on the next Start click.
+  function changePlane() {
+    resetPlaneState();
+    gameState.gameStarted = false;
+
+    dom.crashOverlay.style.display = 'none';
+    dom.gameHud.classList.add('hidden');
+    dom.controlsHint.classList.add('hidden');
+    dom.fpsCounterBox.classList.add('hidden');
+    dom.mainMenu.classList.remove('hidden');
   }
 
   // Cache DOM Elements
@@ -138,7 +272,19 @@
     dom.score = document.getElementById('score');
     dom.bestScore = document.getElementById('bestScore');
     dom.fps = document.getElementById('fps');
-    dom.gameOverText = document.getElementById('gameOverText');
+
+    dom.gameHud = document.getElementById('gameHud');
+    dom.controlsHint = document.getElementById('controlsHint');
+    dom.fpsCounterBox = document.getElementById('fpsCounter');
+
+    dom.mainMenu = document.getElementById('mainMenu');
+    dom.planeSelect = document.getElementById('planeSelect');
+    dom.startFlightBtn = document.getElementById('startFlightBtn');
+
+    dom.crashOverlay = document.getElementById('crashOverlay');
+    dom.crashScoreLine = document.getElementById('crashScoreLine');
+    dom.restartBtn = document.getElementById('restartBtn');
+    dom.changePlaneBtn = document.getElementById('changePlaneBtn');
   }
 
   // Create Checkpoints (rings to fly through)
@@ -260,8 +406,13 @@
   }
 
   // Create Plane Mesh
-  function createPlaneMesh(scene) {
-    // Create a simple plane model from primitives.
+  // Every plane type is assembled from the same handful of simple primitives
+  // (cylinders/boxes/cones, low tessellation) - only dimensions, colors, and
+  // which optional parts are attached change per type in PLANE_TYPES. This
+  // keeps every plane just as cheap to render as the original single model.
+  function createPlaneMesh(scene, typeKey) {
+    const type = PLANE_TYPES[typeKey] || PLANE_TYPES[DEFAULT_PLANE_TYPE];
+
     // Note: planeGroup.position must be a real BABYLON.Vector3 (not the plain
     // {x,y,z} object in gameState.plane.position) since updateGame() calls
     // .copyFromFloats() on it every frame instead of reallocating.
@@ -272,42 +423,108 @@
       gameState.plane.position.z
     );
 
-    // Fuselage (main body)
-    const fuselage = BABYLON.MeshBuilder.CreateCylinder('fuselage', { height: 15, diameter: 2, tessellation: 12 }, scene);
-    fuselage.parent = planeGroup;
-    const fuselageMat = new BABYLON.StandardMaterial('fuselageMat', scene);
-    fuselageMat.diffuse = new BABYLON.Color3(0.9, 0.1, 0.1);
-    fuselageMat.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-    fuselageMat.emissiveColor = new BABYLON.Color3(0.2, 0, 0);
-    fuselage.material = fuselageMat;
-    fuselage.rotation.z = Math.PI / 2;
+    const bodyMat = new BABYLON.StandardMaterial('bodyMat', scene);
+    bodyMat.diffuse = type.bodyColor;
+    bodyMat.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
 
-    // Wings
-    const wing = BABYLON.MeshBuilder.CreateBox('wing', { width: 30, height: 1, depth: 3 }, scene);
-    wing.parent = planeGroup;
-    const wingMat = new BABYLON.StandardMaterial('wingMat', scene);
-    wingMat.diffuse = new BABYLON.Color3(0.8, 0.2, 0.2);
-    wing.material = wingMat;
-    wing.position.y = 0;
+    const accentMat = new BABYLON.StandardMaterial('accentMat', scene);
+    accentMat.diffuse = type.accentColor;
+    accentMat.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
 
-    // Tail fin
-    const tail = BABYLON.MeshBuilder.CreateBox('tail', { width: 2, height: 8, depth: 2 }, scene);
-    tail.parent = planeGroup;
-    const tailMat = new BABYLON.StandardMaterial('tailMat', scene);
-    tailMat.diffuse = new BABYLON.Color3(0.6, 0.2, 0.2);
-    tail.material = tailMat;
-    tail.position.z = -7;
-    tail.position.y = 1;
-
-    // Cockpit
-    const cockpit = BABYLON.MeshBuilder.CreateSphere('cockpit', { diameter: 2.5 }, scene);
-    cockpit.parent = planeGroup;
     const cockpitMat = new BABYLON.StandardMaterial('cockpitMat', scene);
     cockpitMat.diffuse = new BABYLON.Color3(0.3, 0.3, 0.3);
     cockpitMat.specularColor = new BABYLON.Color3(0.5, 0.5, 0.5);
-    cockpit.material = cockpitMat;
-    cockpit.position.x = 5;
-    cockpit.position.y = 1.5;
+
+    // Fuselage (main body)
+    const fuselage = BABYLON.MeshBuilder.CreateCylinder('fuselage', {
+      height: type.fuselageLength, diameter: type.fuselageDiameter, tessellation: 12,
+    }, scene);
+    fuselage.parent = planeGroup;
+    fuselage.material = bodyMat;
+    fuselage.rotation.z = Math.PI / 2;
+
+    // Wings - straight rectangular wing for most planes, or a simple two-box
+    // swept "delta" shape (two thin boxes angled outward) for Concorde.
+    if (type.wingStyle === 'delta') {
+      const halfSpan = type.wingSpan / 2;
+      const sweepAngle = Math.PI / 5; // ~36 degrees sweep, just for silhouette
+      [1, -1].forEach((side) => {
+        const wingHalf = BABYLON.MeshBuilder.CreateBox('wingHalf', {
+          width: halfSpan * 1.4, height: 0.4, depth: type.wingDepth * 0.5,
+        }, scene);
+        wingHalf.parent = planeGroup;
+        wingHalf.material = accentMat;
+        wingHalf.position.x = side * halfSpan * 0.45;
+        wingHalf.position.z = -type.wingDepth * 0.15;
+        wingHalf.rotation.y = -side * sweepAngle;
+      });
+    } else {
+      const wing = BABYLON.MeshBuilder.CreateBox('wing', {
+        width: type.wingSpan, height: 1, depth: type.wingDepth,
+      }, scene);
+      wing.parent = planeGroup;
+      wing.material = accentMat;
+    }
+
+    // Tail fin
+    const tail = BABYLON.MeshBuilder.CreateBox('tail', {
+      width: type.fuselageDiameter, height: type.tailHeight, depth: 2,
+    }, scene);
+    tail.parent = planeGroup;
+    tail.material = accentMat;
+    tail.position.z = -(type.fuselageLength / 2 - 1);
+    tail.position.y = type.tailHeight / 2 - 1;
+
+    // Nose - a sphere "cockpit" bubble for most planes, or a thin cone for
+    // Concorde's iconic droop nose. The 747 additionally gets a small hump
+    // (upper deck) sitting just behind its cockpit.
+    if (type.noseStyle === 'cone') {
+      const nose = BABYLON.MeshBuilder.CreateCylinder('nose', {
+        height: 4, diameterTop: 0, diameterBottom: type.fuselageDiameter * 0.8, tessellation: 8,
+      }, scene);
+      nose.parent = planeGroup;
+      nose.material = accentMat;
+      nose.rotation.z = -Math.PI / 2;
+      nose.position.x = type.fuselageLength / 2 + 1.5;
+    } else {
+      const cockpit = BABYLON.MeshBuilder.CreateSphere('cockpit', { diameter: type.fuselageDiameter * 1.2 }, scene);
+      cockpit.parent = planeGroup;
+      cockpit.material = cockpitMat;
+      cockpit.position.x = type.fuselageLength / 2 - 2;
+      cockpit.position.y = type.fuselageDiameter * 0.4;
+
+      if (type.noseStyle === 'hump') {
+        const hump = BABYLON.MeshBuilder.CreateSphere('hump', {
+          diameterX: type.fuselageDiameter * 1.4,
+          diameterY: type.fuselageDiameter * 0.8,
+          diameterZ: type.fuselageDiameter * 2.2,
+        }, scene);
+        hump.parent = planeGroup;
+        hump.material = bodyMat;
+        hump.position.x = type.fuselageLength / 2 - 6;
+        hump.position.y = type.fuselageDiameter * 0.55;
+      }
+    }
+
+    // Engines - small cylinders slung under the wings, evenly spread per side.
+    if (type.engineCount > 0) {
+      const engineMat = new BABYLON.StandardMaterial('engineMat', scene);
+      engineMat.diffuse = new BABYLON.Color3(0.25, 0.25, 0.28);
+      const perSide = type.engineCount / 2;
+      [1, -1].forEach((side) => {
+        for (let i = 0; i < perSide; i++) {
+          const engine = BABYLON.MeshBuilder.CreateCylinder('engine', {
+            height: type.fuselageLength * 0.18, diameter: type.fuselageDiameter * 0.45, tessellation: 8,
+          }, scene);
+          engine.parent = planeGroup;
+          engine.material = engineMat;
+          engine.rotation.z = Math.PI / 2;
+          const spanFraction = 0.3 + i * 0.3;
+          engine.position.x = side * type.wingSpan * spanFraction * 0.5;
+          engine.position.y = -type.fuselageDiameter * 0.6;
+        }
+      });
+    }
 
     return planeGroup;
   }
@@ -319,10 +536,14 @@
     // child meshes can be registered as shadow casters, otherwise Babylon
     // throws "getBoundingInfo is not a function" the first time it renders
     // the shadow map, which silently kills the render loop.
+    if (gameState.shadowGenerator) {
+      gameState.shadowGenerator.dispose();
+    }
     const light = scene.lights[0];
     const shadowGenerator = new BABYLON.ShadowGenerator(1024, light);
     planeMesh.getChildMeshes().forEach((mesh) => shadowGenerator.addShadowCaster(mesh));
     shadowGenerator.useBlurExponentialShadowMap = true;
+    gameState.shadowGenerator = shadowGenerator;
   }
 
   // Setup Controls
@@ -347,8 +568,9 @@
   }
 
   // Update Game Physics
-  function updateGame(planeMesh) {
-    if (gameState.isCrashed) return;
+  function updateGame() {
+    if (!gameState.gameStarted || gameState.isCrashed) return;
+    const planeMesh = gameState.planeMesh;
 
     if (!gameState.isFlying) {
       gameState.isFlying = true;
@@ -401,6 +623,7 @@
   function handleInput(dt) {
     const keys = gameState.keys;
     const p = gameState.plane;
+    const turnRate = gameState.planeStats.turnRate;
 
     // Throttle control - smoother acceleration/deceleration
     if (keys[' ']) {
@@ -409,8 +632,8 @@
       p.throttle = Math.max(0, p.throttle - 0.03 * dt);
     }
 
-    // Pitch control (up/down rotation)
-    const pitchSensitivity = 0.04 * dt;
+    // Pitch control (up/down rotation) - heavier planes (lower turnRate) respond slower
+    const pitchSensitivity = 0.04 * dt * turnRate;
     const maxPitch = Math.PI / 2.5;
     let pitchInput = 0;
 
@@ -425,7 +648,7 @@
     p.rotation.x = BABYLON.Scalar.Clamp(p.rotation.x + pitchInput, -maxPitch, maxPitch);
 
     // Roll control (left/right rotation)
-    const rollSensitivity = 0.04 * dt;
+    const rollSensitivity = 0.04 * dt * turnRate;
     const maxRoll = Math.PI / 3;
     let rollInput = 0;
 
@@ -445,7 +668,7 @@
     p.rotation.z *= neutralDecay;
 
     // Yaw control
-    const yawSensitivity = 0.03 * dt;
+    const yawSensitivity = 0.03 * dt * turnRate;
     if (keys['q']) {
       p.rotation.y -= yawSensitivity;
     }
@@ -457,11 +680,12 @@
   // Update Plane Physics
   function updatePlanePhysics(dt) {
     const p = gameState.plane;
+    const stats = gameState.planeStats;
     const minStallSpeed = 0.15;
 
     // Calculate speed based on throttle with acceleration curve
     // (exponential smoothing formula keeps the lerp rate consistent regardless of frame rate)
-    const maxSpeed = 1.5;
+    const maxSpeed = 1.5 * stats.speed;
     const targetSpeed = p.throttle * maxSpeed;
     const speedLerpFactor = 1 - Math.pow(1 - 0.1, dt);
     p.speed = BABYLON.Scalar.Lerp(p.speed, targetSpeed, speedLerpFactor);
@@ -486,15 +710,16 @@
     p.velocity.y += verticalComponent * dt;
 
     // Apply drag (speed dependent, frame-rate independent decay)
+    const drag = p.drag * stats.drag;
     const speedDrag = p.speed * 0.01;
-    const dragFactorY = Math.pow(1 - p.drag - speedDrag, dt);
-    const dragFactorXZ = Math.pow(1 - p.drag * 0.3 - speedDrag * 0.5, dt);
+    const dragFactorY = Math.pow(1 - drag - speedDrag, dt);
+    const dragFactorXZ = Math.pow(1 - drag * 0.3 - speedDrag * 0.5, dt);
     p.velocity.y *= dragFactorY;
     p.velocity.x *= dragFactorXZ;
     p.velocity.z *= dragFactorXZ;
 
     // Apply lift (higher speed = more lift to counteract gravity)
-    const liftForce = p.speed * p.lift;
+    const liftForce = p.speed * p.lift * stats.lift;
     if (p.speed > minStallSpeed) {
       p.velocity.y += liftForce * dt;
     } else if (!isStalled) {
@@ -633,7 +858,8 @@
 
   // Display Game Over Message
   function displayGameOver() {
-    dom.gameOverText.style.display = 'block';
+    dom.crashScoreLine.textContent = 'Score: ' + gameState.score;
+    dom.crashOverlay.style.display = 'flex';
   }
 
   // Save Best Score to localStorage
@@ -645,8 +871,10 @@
     }
   }
 
-  // Restart Game
-  function restartGame() {
+  // Reset all flight/score/checkpoint state back to spawn conditions.
+  // Shared by restartGame() (same plane, keyboard R / Restart button) and
+  // changePlane() (returns to the main menu to pick a different plane).
+  function resetPlaneState() {
     gameState.isFlying = false;
     gameState.isCrashed = false;
     gameState.flightTime = 0;
@@ -654,7 +882,7 @@
     gameState.maxAltitude = 0;
     gameState.score = 0;
 
-    // Clear held-key state so a key held through the restart (e.g. Space
+    // Clear held-key state so a key held through the reset (e.g. Space
     // for throttle) doesn't immediately re-apply on the next frame.
     gameState.keys = {};
 
@@ -674,8 +902,12 @@
         checkpoint.mesh.material.emissiveColor = new BABYLON.Color3(0.1, 0.8, 0.1); // Green
       });
     }
+  }
 
-    dom.gameOverText.style.display = 'none';
+  // Restart Game (same plane type - keyboard R or the Restart button)
+  function restartGame() {
+    resetPlaneState();
+    dom.crashOverlay.style.display = 'none';
   }
 
   // Set text content only when the value actually changed, to avoid needless
