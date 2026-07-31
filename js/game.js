@@ -109,6 +109,22 @@
     // Best score (persisted)
     bestScore: 0,
     allCheckpointsBonusGiven: false,
+    allCoinsBonusGiven: false,
+    checkpointsPassed: 0,
+
+    // Ring/coin bonuses accumulate here, kept separate from the
+    // altitude+time baseline recomputed every frame in updateGame() so a
+    // bonus awarded this frame isn't overwritten the moment the baseline is
+    // recalculated next frame.
+    bonusScore: 0,
+
+    // Hull health - rough landings/impacts cost health instead of ending the
+    // flight outright; only a hull breach (0 health) or a violent impact
+    // triggers a real crash. Slowly regenerates while airborne.
+    health: 100,
+    maxHealth: 100,
+
+    coinsCollected: 0,
   };
 
   // Reusable scratch vectors to avoid per-frame allocations
@@ -179,6 +195,7 @@
     setupLighting(scene);
     createGround(scene);
     createCheckpoints(scene);
+    createCoins(scene);
 
     // The plane mesh itself is created lazily by startFlight() once the
     // player picks a plane and clicks Start - the scene/ground/skybox render
@@ -273,6 +290,11 @@
     dom.bestScore = document.getElementById('bestScore');
     dom.fps = document.getElementById('fps');
     dom.artificialHorizonCanvas = document.getElementById('artificialHorizonCanvas');
+    dom.healthBarFill = document.getElementById('healthBarFill');
+    dom.ringsCount = document.getElementById('ringsCount');
+    dom.coinsCount = document.getElementById('coinsCount');
+    dom.terrainWarning = document.getElementById('terrainWarning');
+    dom.damageFlash = document.getElementById('damageFlash');
 
     dom.gameHud = document.getElementById('gameHud');
     dom.controlsHint = document.getElementById('controlsHint');
@@ -289,16 +311,23 @@
   }
 
   // Create Checkpoints (rings to fly through)
+  // Route is expanded to a 10-ring loop that tours all three islands, so
+  // there's always a nearby mini-goal instead of one long straight circuit.
   function createCheckpoints(scene) {
     gameState.checkpoints = [];
+    gameState.checkpointsPassed = 0;
 
     const checkpointPositions = [
       { x: 200, y: 100, z: 0 },
-      { x: 400, y: 150, z: -200 },
-      { x: 200, y: 200, z: -400 },
+      { x: 600, y: 150, z: 300 },
+      { x: 1200, y: 350, z: 800 }, // above Island 1
+      { x: 1600, y: 250, z: 650 },
+      { x: 2000, y: 300, z: 500 }, // above Island 3
+      { x: 1000, y: 200, z: -200 },
       { x: -200, y: 150, z: -200 },
-      { x: -400, y: 100, z: 0 },
-      { x: -200, y: 180, z: 300 },
+      { x: -900, y: 300, z: -700 },
+      { x: -1500, y: 320, z: -1000 }, // above Island 2
+      { x: -700, y: 180, z: -300 },
     ];
 
     checkpointPositions.forEach((pos, index) => {
@@ -320,6 +349,62 @@
         radius: 35,
       });
     });
+  }
+
+  // Create Coins - small collectible pickups clustered around each island
+  // plus scattered along the open-sky route. These are the "mini goals" the
+  // player bumps into constantly during a flight, on top of the big ring loop.
+  function createCoins(scene) {
+    gameState.coins = [];
+    gameState.coinsCollected = 0;
+
+    const coinMaterial = new BABYLON.StandardMaterial('coinMat', scene);
+    coinMaterial.diffuse = new BABYLON.Color3(1, 0.85, 0.1);
+    coinMaterial.emissiveColor = new BABYLON.Color3(0.8, 0.65, 0);
+    coinMaterial.specularColor = new BABYLON.Color3(0.6, 0.6, 0.4);
+
+    const addCoin = (x, y, z) => {
+      const coin = BABYLON.MeshBuilder.CreateSphere('coin' + gameState.coins.length, { diameter: 8, segments: 8 }, scene);
+      coin.position = new BABYLON.Vector3(x, y, z);
+      coin.material = coinMaterial;
+      coin.freezeWorldMatrix();
+
+      gameState.coins.push({
+        mesh: coin,
+        position: { x, y, z },
+        collected: false,
+        radius: 14,
+      });
+    };
+
+    // Ring of 6 coins circling above each island at climbing heights
+    const islands = [
+      { x: 1200, z: 800, baseY: 260 },
+      { x: -1500, z: -1000, baseY: 220 },
+      { x: 2000, z: 500, baseY: 200 },
+    ];
+    islands.forEach((island) => {
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2;
+        addCoin(
+          island.x + Math.cos(angle) * 110,
+          island.baseY + i * 12,
+          island.z + Math.sin(angle) * 110
+        );
+      }
+    });
+
+    // A handful of free-floating coins scattered across the open sky between
+    // islands, so there's always something nearby even off the ring route.
+    const scattered = [
+      { x: 0, y: 140, z: 150 },
+      { x: 500, y: 220, z: -50 },
+      { x: -400, y: 200, z: 100 },
+      { x: 300, y: 260, z: 500 },
+      { x: -800, y: 240, z: -400 },
+      { x: 1400, y: 280, z: 100 },
+    ];
+    scattered.forEach((pos) => addCoin(pos.x, pos.y, pos.z));
   }
 
   // Create Scene
@@ -478,9 +563,14 @@
       trunkMat.diffuse = new BABYLON.Color3(0.4, 0.2, 0.1);
       trunk.material = trunkMat;
 
-      const foliage = BABYLON.MeshBuilder.CreateCone('foliage', {
+      // This babylon.js build has no CreateCone helper - a cylinder with
+      // diameterTop: 0 gives the same cone shape (used elsewhere for the
+      // Concorde's nose cone too).
+      const foliage = BABYLON.MeshBuilder.CreateCylinder('foliage', {
         height: treeHeight * 0.7,
+        diameterTop: 0,
         diameterBottom: treeHeight * 0.5,
+        tessellation: 8,
       }, scene);
       foliage.position.x = treeX;
       foliage.position.y = islandY + treeHeight * 0.5;
@@ -675,8 +765,8 @@
     // Track max altitude
     gameState.maxAltitude = Math.max(gameState.maxAltitude, gameState.plane.position.y);
 
-    // Calculate score (altitude + time)
-    gameState.score = Math.floor(gameState.maxAltitude * 10 + gameState.flightTime * 5);
+    // Calculate score (altitude + time baseline, plus accumulated ring/coin bonuses)
+    gameState.score = Math.floor(gameState.maxAltitude * 10 + gameState.flightTime * 5) + gameState.bonusScore;
 
     // Handle input
     handleInput(dt);
@@ -699,11 +789,18 @@
     // Update camera to follow plane
     updateCamera(dt);
 
-    // Check collisions
-    checkCollisions();
+    // Slowly repair the hull while safely airborne (well clear of the
+    // ground), so a rough patch of flying isn't a permanent handicap.
+    if (gameState.health < gameState.maxHealth && gameState.plane.position.y > 10) {
+      gameState.health = Math.min(gameState.maxHealth, gameState.health + 1.2 * dt);
+    }
 
-    // Check checkpoint passages
+    // Check collisions
+    checkCollisions(dt);
+
+    // Check checkpoint passages and coin pickups
     checkCheckpoints();
+    checkCoins();
   }
 
   // Handle Player Input
@@ -777,8 +874,11 @@
     const speedLerpFactor = 1 - Math.pow(1 - 0.1, dt);
     p.speed = BABYLON.Scalar.Lerp(p.speed, targetSpeed, speedLerpFactor);
 
-    // Stall mechanics - too slow = loss of lift and control
-    const isStalled = p.speed < minStallSpeed && p.rotation.x > 0.2;
+    // Stall mechanics - too slow while nose-up = loss of lift and control.
+    // Threshold raised from the original 0.2 rad and the penalties below
+    // softened, so a stall is recoverable instead of an instant death spiral
+    // feeding straight into the ground-impact system.
+    const isStalled = p.speed < minStallSpeed && p.rotation.x > 0.35;
 
     // Calculate forward direction based on rotation
     const cos = Math.cos(p.rotation.y);
@@ -788,12 +888,12 @@
 
     // Velocity (forward direction) - these represent per-60fps-frame displacement,
     // so they get scaled by dt once at the position-integration step below.
-    const forwardMultiplier = isStalled ? 0.3 : 1;
+    const forwardMultiplier = isStalled ? 0.5 : 1;
     p.velocity.x = sin * cos * p.speed * pitchCos * forwardMultiplier;
     p.velocity.z = cos * cos * p.speed * pitchCos * forwardMultiplier;
 
     // Vertical component based on pitch - more sensitive
-    const verticalComponent = isStalled ? pitchSin * 0.1 : pitchSin * p.speed * 0.4;
+    const verticalComponent = isStalled ? pitchSin * 0.15 : pitchSin * p.speed * 0.4;
     p.velocity.y += verticalComponent * dt;
 
     // Apply drag (speed dependent, frame-rate independent decay)
@@ -815,7 +915,7 @@
     }
 
     // Apply gravity
-    const gravityForce = isStalled ? 0.015 : 0.01;
+    const gravityForce = isStalled ? 0.012 : 0.01;
     p.velocity.y -= gravityForce * dt;
 
     // Terminal velocity limit
@@ -897,8 +997,9 @@
       if (distSq < checkpoint.radius * checkpoint.radius) {
         // Checkpoint passed!
         checkpoint.passed = true;
+        gameState.checkpointsPassed++;
         checkpoint.mesh.material.emissiveColor = new BABYLON.Color3(1, 1, 0); // Yellow
-        gameState.score += 500; // Bonus for passing checkpoint
+        gameState.bonusScore += 500; // Bonus for passing checkpoint
         playCheckpointSound();
       }
     });
@@ -906,41 +1007,130 @@
     // All checkpoints cleared - one-time big bonus
     if (allPassed && !gameState.allCheckpointsBonusGiven) {
       gameState.allCheckpointsBonusGiven = true;
-      gameState.score += 2000;
+      gameState.bonusScore += 2000;
+      playCheckpointSound();
+    }
+  }
+
+  // Check Coin Pickups
+  function checkCoins() {
+    if (!gameState.coins) return;
+
+    const p = gameState.plane.position;
+    let allCollected = true;
+
+    gameState.coins.forEach((coin) => {
+      if (coin.collected) return;
+      allCollected = false;
+
+      const distSq =
+        (p.x - coin.position.x) ** 2 +
+        (p.y - coin.position.y) ** 2 +
+        (p.z - coin.position.z) ** 2;
+
+      if (distSq < coin.radius * coin.radius) {
+        coin.collected = true;
+        coin.mesh.setEnabled(false);
+        gameState.coinsCollected++;
+        gameState.bonusScore += 50;
+        playSound(900, 0.08, 'sine');
+      }
+    });
+
+    // All coins collected - one-time bonus
+    if (allCollected && !gameState.allCoinsBonusGiven) {
+      gameState.allCoinsBonusGiven = true;
+      gameState.bonusScore += 1000;
       playCheckpointSound();
     }
   }
 
   // Check Collisions
-  function checkCollisions() {
+  // Ground impacts no longer end the flight outright. Only a genuinely
+  // violent impact (near terminal velocity) is an instant crash; everything
+  // else costs hull health and bounces the plane back into the air, so one
+  // rough landing doesn't end the run - the flight only really ends on a
+  // hull breach (health reaching 0) or a hard-enough single hit.
+  function checkCollisions(dt) {
     const p = gameState.plane;
     const groundLevel = 0.5;
 
-    // Crash if hitting ground
     if (p.position.y <= groundLevel) {
-      // Check velocity to avoid bouncing
-      if (p.velocity.y < -0.1) {
-        gameState.isCrashed = true;
-        p.position.y = groundLevel;
-        gameState.planeMesh.position.y = groundLevel;
-        displayGameOver();
-        playCrashSound();
-        saveBestScore();
+      const impactVelocity = p.velocity.y;
+
+      if (impactVelocity < -0.4) {
+        // Near terminal velocity - a genuine crash regardless of hull health
+        triggerCrash(groundLevel);
+      } else if (impactVelocity < -0.25) {
+        // Hard impact - heavy hull damage
+        applyImpactDamage(45, groundLevel);
+      } else if (impactVelocity < -0.1) {
+        // Rough landing - minor hull damage
+        applyImpactDamage(18, groundLevel);
       } else {
-        // Soft landing - just touch ground gently
+        // Soft landing / touch-and-go - no damage
         p.position.y = groundLevel;
         p.velocity.y = 0;
       }
     }
 
-    // Keep plane within reasonable bounds (prevent flying too far away)
-    const maxDistance = 2500;
-    const distance = Math.sqrt(p.position.x ** 2 + p.position.z ** 2);
-    if (distance > maxDistance) {
+    // Soft boundary: gently steer the plane back toward the play area
+    // instead of teleporting it, so hitting the edge doesn't feel like a
+    // visual glitch.
+    const maxDistance = 2800;
+    const distSqFromCenter = p.position.x * p.position.x + p.position.z * p.position.z;
+    if (distSqFromCenter > maxDistance * maxDistance) {
+      const distance = Math.sqrt(distSqFromCenter);
       const angle = Math.atan2(p.position.z, p.position.x);
-      p.position.x = Math.cos(angle) * maxDistance;
-      p.position.z = Math.sin(angle) * maxDistance;
+      const overshoot = distance - maxDistance;
+      const pullBack = overshoot * 0.08 * dt;
+      p.position.x -= Math.cos(angle) * pullBack;
+      p.position.z -= Math.sin(angle) * pullBack;
     }
+  }
+
+  // Apply hull damage from a non-fatal impact: knock the plane back into
+  // the air with reduced speed, flash the screen red, and only convert to a
+  // real crash if the hull is fully breached.
+  function applyImpactDamage(amount, groundLevel) {
+    const p = gameState.plane;
+
+    gameState.health = Math.max(0, gameState.health - amount);
+    flashDamage();
+    playCrashSound();
+
+    p.position.y = groundLevel + 3;
+    p.velocity.y = Math.abs(p.velocity.y) * 0.4 + 0.06;
+    p.velocity.x *= 0.6;
+    p.velocity.z *= 0.6;
+    p.speed *= 0.6;
+    p.throttle *= 0.5;
+
+    if (gameState.health <= 0) {
+      triggerCrash(groundLevel);
+    }
+  }
+
+  // Genuine crash: ends the flight and shows the game-over screen.
+  function triggerCrash(groundLevel) {
+    const p = gameState.plane;
+    gameState.isCrashed = true;
+    gameState.health = 0;
+    p.position.y = groundLevel;
+    gameState.planeMesh.position.y = groundLevel;
+    displayGameOver();
+    playCrashSound();
+    saveBestScore();
+  }
+
+  // Briefly flash the screen red on impact damage (auto-clears via CSS transition)
+  function flashDamage() {
+    if (!dom.damageFlash) return;
+    dom.damageFlash.classList.add('active');
+    clearTimeout(gameState._damageFlashTimeout);
+    gameState._damageFlashTimeout = setTimeout(() => {
+      dom.damageFlash.classList.remove('active');
+    }, 120);
   }
 
   // Display Game Over Message
@@ -968,6 +1158,8 @@
     gameState.startTime = null;
     gameState.maxAltitude = 0;
     gameState.score = 0;
+    gameState.bonusScore = 0;
+    gameState.health = gameState.maxHealth;
 
     // Clear held-key state so a key held through the reset (e.g. Space
     // for throttle) doesn't immediately re-apply on the next frame.
@@ -981,12 +1173,27 @@
     gameState.plane.isStalled = false;
 
     gameState.allCheckpointsBonusGiven = false;
+    gameState.allCoinsBonusGiven = false;
+    gameState.checkpointsPassed = 0;
+    gameState.coinsCollected = 0;
+
+    if (dom.damageFlash) dom.damageFlash.classList.remove('active');
+    if (dom.terrainWarning) dom.terrainWarning.classList.add('hidden');
+    lastHudText.terrainWarningShown = false;
 
     // Reset checkpoints
     if (gameState.checkpoints) {
       gameState.checkpoints.forEach((checkpoint) => {
         checkpoint.passed = false;
         checkpoint.mesh.material.emissiveColor = new BABYLON.Color3(0.1, 0.8, 0.1); // Green
+      });
+    }
+
+    // Reset coins
+    if (gameState.coins) {
+      gameState.coins.forEach((coin) => {
+        coin.collected = false;
+        coin.mesh.setEnabled(true);
       });
     }
   }
@@ -1111,6 +1318,34 @@
     setHudText('heading', dom.heading, Math.round((p.rotation.y * 180) / Math.PI) + '°');
     setHudText('flightTime', dom.flightTime, gameState.flightTime + 's');
     setHudText('score', dom.score, String(gameState.score));
+
+    // Health/hull bar
+    if (dom.healthBarFill) {
+      const healthPct = Math.round((gameState.health / gameState.maxHealth) * 100);
+      if (lastHudText.healthPct !== healthPct) {
+        lastHudText.healthPct = healthPct;
+        dom.healthBarFill.style.width = healthPct + '%';
+        dom.healthBarFill.style.background =
+          healthPct > 50 ? '#00e676' : healthPct > 25 ? '#ffaa00' : '#ff3b3b';
+      }
+    }
+
+    // Ring/coin objective counters
+    if (dom.ringsCount && gameState.checkpoints) {
+      setHudText('ringsCount', dom.ringsCount, gameState.checkpointsPassed + '/' + gameState.checkpoints.length);
+    }
+    if (dom.coinsCount && gameState.coins) {
+      setHudText('coinsCount', dom.coinsCount, gameState.coinsCollected + '/' + gameState.coins.length);
+    }
+
+    // Low-altitude terrain warning - only while actually descending toward it
+    if (dom.terrainWarning && gameState.gameStarted && !gameState.isCrashed) {
+      const nearGround = p.position.y < 60 && p.velocity.y < -0.05;
+      if (lastHudText.terrainWarningShown !== nearGround) {
+        lastHudText.terrainWarningShown = nearGround;
+        dom.terrainWarning.classList.toggle('hidden', !nearGround);
+      }
+    }
 
     // Draw artificial horizon indicator
     if (gameState.gameStarted && dom.artificialHorizonCanvas) {

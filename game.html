@@ -49,38 +49,54 @@
       <canvas id="gameCanvas"></canvas>
 
       <div class="game-hud hidden" id="gameHud">
-        <div class="hud-left">
-          <div class="hud-item">
-            <span class="hud-label">Altitude</span>
-            <span class="hud-value" id="altitude">0m</span>
+        <div class="hud-top-row">
+          <div class="hud-left">
+            <div class="hud-item">
+              <span class="hud-label">Altitude</span>
+              <span class="hud-value" id="altitude">0m</span>
+            </div>
+            <div class="hud-item">
+              <span class="hud-label">Speed</span>
+              <span class="hud-value" id="speed">0 km/h</span>
+            </div>
+            <div class="hud-item">
+              <span class="hud-label">Heading</span>
+              <span class="hud-value" id="heading">0°</span>
+            </div>
           </div>
-          <div class="hud-item">
-            <span class="hud-label">Speed</span>
-            <span class="hud-value" id="speed">0 km/h</span>
+
+          <!-- Artificial Horizon Indicator (center) -->
+          <div class="artificial-horizon-container">
+            <canvas id="artificialHorizonCanvas" width="140" height="140"></canvas>
           </div>
-          <div class="hud-item">
-            <span class="hud-label">Heading</span>
-            <span class="hud-value" id="heading">0°</span>
+
+          <div class="hud-right">
+            <div class="hud-item">
+              <span class="hud-label">Flight Time</span>
+              <span class="hud-value" id="flightTime">0s</span>
+            </div>
+            <div class="hud-item">
+              <span class="hud-label">Score</span>
+              <span class="hud-value" id="score">0</span>
+            </div>
+            <div class="hud-item">
+              <span class="hud-label">Best</span>
+              <span class="hud-value" id="bestScore">0</span>
+            </div>
           </div>
         </div>
 
-        <!-- Artificial Horizon Indicator (center) -->
-        <div class="artificial-horizon-container">
-          <canvas id="artificialHorizonCanvas" width="140" height="140"></canvas>
-        </div>
+        <div class="hud-bottom-row">
+          <div class="health-bar-container">
+            <span class="health-bar-label">HULL</span>
+            <div class="health-bar-track">
+              <div class="health-bar-fill" id="healthBarFill"></div>
+            </div>
+          </div>
 
-        <div class="hud-right">
-          <div class="hud-item">
-            <span class="hud-label">Flight Time</span>
-            <span class="hud-value" id="flightTime">0s</span>
-          </div>
-          <div class="hud-item">
-            <span class="hud-label">Score</span>
-            <span class="hud-value" id="score">0</span>
-          </div>
-          <div class="hud-item">
-            <span class="hud-label">Best</span>
-            <span class="hud-value" id="bestScore">0</span>
+          <div class="objectives-panel">
+            <div class="objective-item">🎯 Rings <span id="ringsCount">0/0</span></div>
+            <div class="objective-item">⭐ Coins <span id="coinsCount">0/0</span></div>
           </div>
         </div>
       </div>
@@ -93,6 +109,12 @@
         <strong>W/S:</strong> Pitch &nbsp; <strong>A/D:</strong> Roll &nbsp; <strong>Q/E:</strong> Turn &nbsp;
         <strong>Space/Shift:</strong> Throttle &nbsp; <strong>C:</strong> Camera
       </div>
+
+      <!-- Low-altitude terrain warning (shown briefly when descending too fast near ground) -->
+      <div class="terrain-warning hidden" id="terrainWarning">⚠ PULL UP ⚠</div>
+
+      <!-- Full-screen red flash on impact damage -->
+      <div class="damage-flash" id="damageFlash"></div>
 
       <!-- Main menu: plane selection + instructions, shown before flight starts -->
       <div class="main-menu" id="mainMenu">
@@ -131,7 +153,8 @@
               <div><strong>Shift</strong> Throttle down</div>
               <div><strong>C</strong> Toggle camera view</div>
             </div>
-            <p class="menu-goal">🎯 Fly through the green rings for +500 points each — clear all 6 for a +2000 bonus!</p>
+            <p class="menu-goal">🎯 Fly through green rings (+500 each) and grab yellow coins (+50 each) scattered around the islands. Clear everything for big bonuses!</p>
+            <p class="menu-goal">🛡️ Your plane has a HULL bar — rough landings cost health but don't end the game instantly. Only a full hull breach (or a violent crash) ends the flight, and hull slowly repairs itself while airborne.</p>
           </div>
 
           <button class="btn-start" id="startFlightBtn" type="button">Start Flight</button>

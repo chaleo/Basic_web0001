@@ -28,9 +28,15 @@
   left: 20px;
   right: 20px;
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 14px;
   pointer-events: none;
   z-index: 10;
+}
+
+.hud-top-row {
+  display: flex;
+  justify-content: space-between;
 }
 
 .hud-left {
@@ -359,4 +365,110 @@
   border: 2px solid #00ff00;
   width: 140px;
   height: 140px;
+}
+
+/* Bottom HUD row: health bar + objectives */
+.hud-bottom-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.health-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 8px 16px;
+  border-radius: 8px;
+}
+
+.health-bar-label {
+  font-size: 0.8rem;
+  color: #ccc;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.health-bar-track {
+  width: 180px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.health-bar-fill {
+  height: 100%;
+  width: 100%;
+  background: #00e676;
+  border-radius: 7px;
+  transition: width 0.25s ease, background-color 0.25s ease;
+}
+
+.objectives-panel {
+  display: flex;
+  gap: 16px;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 8px 16px;
+  border-radius: 8px;
+}
+
+.objective-item {
+  font-size: 0.9rem;
+  color: #fff;
+  font-family: 'Courier New', monospace;
+  white-space: nowrap;
+}
+
+/* Low-altitude / terrain proximity warning */
+.terrain-warning {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #ff3b3b;
+  font-size: 1.8rem;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-shadow: 0 0 12px rgba(255, 0, 0, 0.9);
+  pointer-events: none;
+  z-index: 15;
+  animation: terrainPulse 0.5s infinite alternate;
+}
+
+@keyframes terrainPulse {
+  from { opacity: 0.5; }
+  to { opacity: 1; }
+}
+
+/* Full-screen red damage flash */
+.damage-flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 0, 0, 0);
+  pointer-events: none;
+  z-index: 20;
+  transition: background 0.08s ease-out;
+}
+
+.damage-flash.active {
+  background: rgba(255, 0, 0, 0.35);
+  transition: background 0.05s ease-in;
+}
+
+@media (max-width: 768px) {
+  .hud-bottom-row {
+    flex-direction: column;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .health-bar-track {
+    width: 120px;
+  }
+
+  .objectives-panel {
+    justify-content: space-between;
+  }
 }
