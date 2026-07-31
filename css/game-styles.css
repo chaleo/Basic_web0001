@@ -344,3 +344,19 @@
     flex-direction: column;
   }
 }
+
+/* Artificial Horizon Indicator */
+.artificial-horizon-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+#artificialHorizonCanvas {
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 50%;
+  border: 2px solid #00ff00;
+  width: 140px;
+  height: 140px;
+}

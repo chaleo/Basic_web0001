@@ -272,6 +272,7 @@
     dom.score = document.getElementById('score');
     dom.bestScore = document.getElementById('bestScore');
     dom.fps = document.getElementById('fps');
+    dom.artificialHorizonCanvas = document.getElementById('artificialHorizonCanvas');
 
     dom.gameHud = document.getElementById('gameHud');
     dom.controlsHint = document.getElementById('controlsHint');
@@ -360,49 +361,135 @@
     createSkybox(scene);
   }
 
-  // Create Skybox
+  // Create Skybox with gradient (sky blue above, lighter below for horizon)
   function createSkybox(scene) {
     const skybox = BABYLON.MeshBuilder.CreateBox('skyBox', { size: 3000 }, scene);
 
     const skyboxMaterial = new BABYLON.StandardMaterial('skybox', scene);
-    skyboxMaterial.emissiveColor = new BABYLON.Color3(0.7, 0.85, 1);
+    skyboxMaterial.emissiveColor = new BABYLON.Color3(0.5, 0.75, 1);
     skyboxMaterial.backFaceCulling = false;
 
     skybox.material = skyboxMaterial;
     skybox.infiniteDistance = true;
-    // Do NOT freeze the world matrix here: infiniteDistance depends on
-    // Babylon recomputing it every frame to re-center the box on the
-    // camera. Freezing it pins the box at the origin, which breaks the
-    // sky as soon as the camera moves outside the box's half-extent.
+
+    // Create a dynamic gradient texture for better sky appearance
+    const skyTexture = new BABYLON.DynamicTexture('skyTexture', 256);
+    const ctx = skyTexture.getContext();
+    const gradient = ctx.createLinearGradient(0, 0, 0, 256);
+    gradient.addColorStop(0, '#4da6ff');    // Deep blue at top
+    gradient.addColorStop(0.5, '#87ceeb');  // Sky blue middle
+    gradient.addColorStop(1, '#e0f6ff');    // Light horizon at bottom
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 256, 256);
+    skyTexture.update();
+
+    skyboxMaterial.emissiveTexture = skyTexture;
   }
 
-  // Create Ground
+  // Create Ground with water and islands
   function createGround(scene) {
-    const groundMaterial = new BABYLON.StandardMaterial('groundMat', scene);
-    groundMaterial.diffuse = new BABYLON.Color3(0.2, 0.8, 0.2);
-    groundMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.5, 0.1);
+    // Ocean/Water base
+    const oceanMaterial = new BABYLON.StandardMaterial('oceanMat', scene);
+    oceanMaterial.diffuse = new BABYLON.Color3(0.1, 0.3, 0.6);
+    oceanMaterial.emissiveColor = new BABYLON.Color3(0.15, 0.4, 0.7);
+    oceanMaterial.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
+
+    const ocean = BABYLON.MeshBuilder.CreateGround('ocean', { width: 5000, height: 5000, subdivisions: 20 }, scene);
+    ocean.material = oceanMaterial;
+    ocean.position.y = 0;
+
+    // Add subtle wave height variation to water
+    const oceanHeights = ocean.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+    if (oceanHeights) {
+      for (let i = 0; i < oceanHeights.length; i += 3) {
+        const x = oceanHeights[i];
+        const z = oceanHeights[i + 2];
+        const wave = Math.sin(x * 0.002) * Math.cos(z * 0.002) * 0.5;
+        oceanHeights[i + 1] = wave;
+      }
+      ocean.updateVerticesData(BABYLON.VertexBuffer.PositionKind, oceanHeights);
+    }
+    ocean.freezeWorldMatrix();
+
+    // Island 1 - Northeast
+    createIsland(scene, 1200, 200, 800, 250, 'Island 1');
+
+    // Island 2 - Southwest
+    createIsland(scene, -1500, 150, -1000, 200, 'Island 2');
+
+    // Island 3 - East
+    createIsland(scene, 2000, 120, 500, 180, 'Island 3');
+
+    // Create forests on islands
+    createForest(scene, 1200, 200, 800, 30);
+    createForest(scene, -1500, 150, -1000, 25);
+    createForest(scene, 2000, 120, 500, 20);
+
+    return ocean;
+  }
+
+  // Helper: Create an island with elevation
+  function createIsland(scene, centerX, maxHeight, centerZ, radius, name) {
+    const groundMaterial = new BABYLON.StandardMaterial(`islandMat_${name}`, scene);
+    groundMaterial.diffuse = new BABYLON.Color3(0.3, 0.6, 0.2);
+    groundMaterial.emissiveColor = new BABYLON.Color3(0.2, 0.5, 0.1);
     groundMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
 
-    // Create ground with more subdivisions for better collision
-    const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 5000, height: 5000, subdivisions: 50 }, scene);
-    ground.material = groundMaterial;
-    ground.position.y = 0;
+    const island = BABYLON.MeshBuilder.CreateGround(name, { width: radius * 2, height: radius * 2, subdivisions: 20 }, scene);
+    island.material = groundMaterial;
+    island.position.x = centerX;
+    island.position.z = centerZ;
 
-    // Add some visual terrain variation
-    const heightMap = ground.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-    if (heightMap) {
-      for (let i = 0; i < heightMap.length; i += 3) {
-        // Add subtle rolling hills
-        const x = heightMap[i];
-        const z = heightMap[i + 2];
-        const noise = Math.sin(x * 0.01) * Math.cos(z * 0.01) * 2;
-        heightMap[i + 1] = noise;
+    // Create dome-like island elevation
+    const heights = island.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+    if (heights) {
+      for (let i = 0; i < heights.length; i += 3) {
+        const x = heights[i];
+        const z = heights[i + 2];
+        const distFromCenter = Math.sqrt(x * x + z * z);
+        const height = Math.max(0, maxHeight * (1 - (distFromCenter / radius) * (distFromCenter / radius)));
+        heights[i + 1] = height;
       }
-      ground.updateVerticesData(BABYLON.VertexBuffer.PositionKind, heightMap);
+      island.updateVerticesData(BABYLON.VertexBuffer.PositionKind, heights);
     }
+    island.freezeWorldMatrix();
+  }
 
-    ground.freezeWorldMatrix(); // Static mesh - skip per-frame matrix recompute
-    return ground;
+  // Helper: Create forest trees on island
+  function createForest(scene, islandX, islandY, islandZ, treeCount) {
+    for (let i = 0; i < treeCount; i++) {
+      const angle = (Math.random() * Math.PI * 2);
+      const distance = Math.random() * 150;
+      const treeX = islandX + Math.cos(angle) * distance;
+      const treeZ = islandZ + Math.sin(angle) * distance;
+      const treeHeight = 15 + Math.random() * 10;
+
+      // Simple tree: cylinder trunk + cone top
+      const trunk = BABYLON.MeshBuilder.CreateCylinder('trunk', {
+        height: treeHeight * 0.3,
+        diameterTop: 2,
+        diameterBottom: 3,
+      }, scene);
+      trunk.position.x = treeX;
+      trunk.position.y = islandY + treeHeight * 0.15;
+      trunk.position.z = treeZ;
+
+      const trunkMat = new BABYLON.StandardMaterial('trunkMat', scene);
+      trunkMat.diffuse = new BABYLON.Color3(0.4, 0.2, 0.1);
+      trunk.material = trunkMat;
+
+      const foliage = BABYLON.MeshBuilder.CreateCone('foliage', {
+        height: treeHeight * 0.7,
+        diameterBottom: treeHeight * 0.5,
+      }, scene);
+      foliage.position.x = treeX;
+      foliage.position.y = islandY + treeHeight * 0.5;
+      foliage.position.z = treeZ;
+
+      const foliageMat = new BABYLON.StandardMaterial('foliageMat', scene);
+      foliageMat.diffuse = new BABYLON.Color3(0.1 + Math.random() * 0.2, 0.5 + Math.random() * 0.2, 0.1);
+      foliage.material = foliageMat;
+    }
   }
 
   // Create Plane Mesh
@@ -920,6 +1007,83 @@
   }
 
   // Update HUD
+  function drawArtificialHorizon() {
+    if (!dom.artificialHorizonCanvas) return;
+
+    const canvas = dom.artificialHorizonCanvas;
+    const ctx = canvas.getContext('2d');
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radius = canvas.width / 2.2;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Sky (blue) and ground (brown) background
+    ctx.fillStyle = '#4da6ff';
+    ctx.fillRect(0, 0, canvas.width, centerY);
+    ctx.fillStyle = '#8b6914';
+    ctx.fillRect(0, centerY, canvas.width, centerY);
+
+    ctx.save();
+    ctx.translate(centerX, centerY);
+
+    // Rotate based on pitch (rotation.x)
+    const pitchAngle = gameState.plane.rotation.x;
+    ctx.rotate(pitchAngle);
+
+    // Draw horizon line
+    ctx.strokeStyle = '#ffff00';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-radius, 0);
+    ctx.lineTo(radius, 0);
+    ctx.stroke();
+
+    // Draw pitch lines
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    for (let i = -3; i <= 3; i++) {
+      if (i === 0) continue;
+      const y = i * (radius / 3);
+      ctx.beginPath();
+      ctx.moveTo(-radius * 0.3, y);
+      ctx.lineTo(radius * 0.3, y);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
+    // Draw roll indicator (sides)
+    ctx.strokeStyle = '#00ff00';
+    ctx.lineWidth = 2;
+    const rollAngle = gameState.plane.rotation.z;
+
+    // Left wing marker
+    ctx.save();
+    ctx.translate(centerX - radius * 0.6, centerY);
+    ctx.rotate(rollAngle);
+    ctx.beginPath();
+    ctx.arc(0, 0, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // Right wing marker
+    ctx.save();
+    ctx.translate(centerX + radius * 0.6, centerY);
+    ctx.rotate(rollAngle);
+    ctx.beginPath();
+    ctx.arc(0, 0, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // Center aircraft symbol
+    ctx.fillStyle = '#00ff00';
+    ctx.fillRect(centerX - 8, centerY - 2, 16, 4);
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   function updateHUD() {
     const p = gameState.plane;
     const speedKmh = Math.floor(p.speed * 500);
@@ -947,6 +1111,11 @@
     setHudText('heading', dom.heading, Math.round((p.rotation.y * 180) / Math.PI) + '°');
     setHudText('flightTime', dom.flightTime, gameState.flightTime + 's');
     setHudText('score', dom.score, String(gameState.score));
+
+    // Draw artificial horizon indicator
+    if (gameState.gameStarted && dom.artificialHorizonCanvas) {
+      drawArtificialHorizon();
+    }
 
     if (dom.fps) {
       setHudText('fps', dom.fps, Math.round(gameState.engine.getFps()) + ' FPS');
