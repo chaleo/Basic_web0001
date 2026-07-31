@@ -20,7 +20,6 @@
       rotation: { x: 0, y: 0, z: 0 },
       speed: 0,
       throttle: 0, // 0-1
-      mass: 1000,
       drag: 0.02,
       lift: 0.08,
       isStalled: false,
@@ -28,7 +27,6 @@
 
     // Input
     keys: {},
-    gameOverText: null,
     cameraMode: 'chase', // 'chase' or 'cockpit'
 
     // Audio
@@ -166,7 +164,7 @@
       const ring = BABYLON.MeshBuilder.CreateTorus('ring' + index, { diameter: 60, thickness: 3 }, scene);
       ring.position = new BABYLON.Vector3(pos.x, pos.y, pos.z);
       ring.material = ringMaterial;
-      ring.freezeWorldMatrix(); // Static mesh - only spins visually via material, no transform changes
+      ring.freezeWorldMatrix(); // Static mesh - position/rotation/scaling never change after creation
 
       gameState.checkpoints.push({
         mesh: ring,
@@ -180,7 +178,6 @@
   // Create Scene
   function createScene(engine, canvas) {
     const scene = new BABYLON.Scene(engine);
-    scene.collisionsEnabled = true;
     scene.gravity = new BABYLON.Vector3(0, -0.015, 0); // Reduced gravity for flight
 
     // Camera - Follow behind the plane
@@ -227,7 +224,10 @@
 
     skybox.material = skyboxMaterial;
     skybox.infiniteDistance = true;
-    skybox.freezeWorldMatrix(); // Static mesh - skip per-frame matrix recompute
+    // Do NOT freeze the world matrix here: infiniteDistance depends on
+    // Babylon recomputing it every frame to re-center the box on the
+    // camera. Freezing it pins the box at the origin, which breaks the
+    // sky as soon as the camera moves outside the box's half-extent.
   }
 
   // Create Ground
@@ -240,7 +240,6 @@
     // Create ground with more subdivisions for better collision
     const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 5000, height: 5000, subdivisions: 50 }, scene);
     ground.material = groundMaterial;
-    ground.checkCollisions = true;
     ground.position.y = 0;
 
     // Add some visual terrain variation
@@ -309,8 +308,6 @@
     cockpit.material = cockpitMat;
     cockpit.position.x = 5;
     cockpit.position.y = 1.5;
-
-    planeGroup.checkCollisions = true;
 
     return planeGroup;
   }
@@ -612,6 +609,7 @@
       // Check velocity to avoid bouncing
       if (p.velocity.y < -0.1) {
         gameState.isCrashed = true;
+        p.position.y = groundLevel;
         gameState.planeMesh.position.y = groundLevel;
         displayGameOver();
         playCrashSound();
@@ -655,6 +653,10 @@
     gameState.startTime = null;
     gameState.maxAltitude = 0;
     gameState.score = 0;
+
+    // Clear held-key state so a key held through the restart (e.g. Space
+    // for throttle) doesn't immediately re-apply on the next frame.
+    gameState.keys = {};
 
     gameState.plane.position = { x: 0, y: 50, z: 0 };
     gameState.plane.velocity = { x: 0, y: 0, z: 0 };
